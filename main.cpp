@@ -417,7 +417,7 @@ public:
         {
             city = city.substr(0, pos);
         }
-        httplib::Client cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
+        httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
         auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
         if (res && res->status == 200)
         {
@@ -437,9 +437,8 @@ public:
             result += "湿度: " + data["humidity"].get<std::string>() + "%\n";
             result += "查询时间: " + data["reporttime"].get<std::string>();
             return result;
-        }else{
-            return "天气请求失败";
         }
+        return "天气请求失败";
     }
     ~WeatherCommand() override
     {
