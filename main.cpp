@@ -186,6 +186,7 @@ public:
                 return "未知指令: " + cmd_name;
             }
         }
+        return "";
     }
 
 };
@@ -394,8 +395,7 @@ public:
 
 int main()
 {
-    Config cfg;
-
+    getAllConfigVal();
     MessageManager m;
     m.cmd_manager.registerCommand(std::make_unique<TimeCommand>());
     m.cmd_manager.registerCommand(std::make_unique<WeatherCommand>());
