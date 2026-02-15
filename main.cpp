@@ -28,7 +28,9 @@ std::string AI_MODEL;
 std::string AI_SYS_PROMPTS;
 int AI_MAX_TOKENS;
 
+////////////////////
 // 用于获取 config 信息
+///////////////////
 class Config{
 private:
     json data;
