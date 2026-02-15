@@ -1,0 +1,21 @@
+{
+    "bot": {
+        "qq": "123456789"
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8080,
+        "access_token": ""
+    },
+    "client": {
+        "host": "127.0.0.1",
+        "port": 5700,
+        "access_token": ""
+    },
+    "amap": {
+        "key": "你的高德API_Key",
+        "host": "restapi.amap.com",
+        "port": 80,
+        "path": "/v3/weather/weatherInfo"
+    }
+}

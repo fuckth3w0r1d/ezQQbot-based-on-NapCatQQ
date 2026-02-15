@@ -5,18 +5,106 @@
 using json = nlohmann::json;
 
 // config
-const std::string BOT_QQ = "";
-const std::string SERVER_HOST = "";
-const int SERVER_PORT = 0;
-const std::string SERVER_ACCESS_TOKEN = "";
-const std::string CLIENT_HOST = "";
-const int CLIENT_PORT = 0;
-const std::string CLIENT_ACCESS_TOKEN = "";
+std::string BOT_QQ;
+std::string SERVER_HOST;
+int SERVER_PORT;
+std::string SERVER_ACCESS_TOKEN;
+std::string CLIENT_HOST;
+int CLIENT_PORT;
+std::string CLIENT_ACCESS_TOKEN;
 
-const std::string AMAP_KEY = "";
-const std::string AMAP_CLIENT_URL = "";
-const int AMAP_CLIENT_PORT = 80;
-const std::string AMAP_GET_URL = "";
+std::string AMAP_KEY;
+std::string AMAP_CLIENT_HOST;
+int AMAP_CLIENT_PORT;
+std::string AMAP_GET_PATH;
+
+// 用于获取 config 信息
+class Config{
+private:
+    json data;
+
+public:
+    Config()
+    {
+        std::ifstream file("config.json");
+        if (!file.is_open()) 
+        {
+            std::cerr << "无法打开文件" << std::endl;
+        }
+        data = json::parse(file);
+    }
+
+    const std::string getBotqq()
+    {
+        return data["bot"]["qq"].get<const std::string>();
+    }
+
+    const std::string getServerHost()
+    {
+        return data["server"]["host"].get<const std::string>();
+    }
+
+    const int getServerPort()
+    {
+        return data["server"]["port"].get<const int>();
+    }
+
+    const std::string getServerToken()
+    {
+        return data["server"]["access_token"].get<const std::string>();
+    }
+
+    const std::string getClientHost()
+    {
+        return data["client"]["host"].get<const std::string>();
+    }
+
+    const int getClientPort()
+    {
+        return data["client"]["port"].get<const int>();
+    }
+
+    const std::string getClientToken()
+    {
+        return data["client"]["access_token"].get<const std::string>();
+    }
+
+    const std::string getAmapKey()
+    {
+        return data["amap_api"]["key"].get<const std::string>();
+    }
+
+    const std::string getAmapHost()
+    {
+        return data["amap_api"]["host"].get<const std::string>();
+    }
+
+    const int getAmapPort()
+    {
+        return data["amap_api"]["port"].get<const int>();
+    }
+
+    const std::string getAmapGetPath()
+    {
+        return data["amap_api"]["path"].get<const std::string>();
+    }
+};
+
+void getAllConfigVal()
+{
+    Config cfg;
+    BOT_QQ = cfg.getBotqq();
+    SERVER_HOST = cfg.getServerHost();
+    SERVER_PORT = cfg.getServerPort();
+    SERVER_ACCESS_TOKEN = cfg.getServerToken();
+    CLIENT_HOST = cfg.getClientHost();
+    CLIENT_PORT = cfg.getClientPort();
+    CLIENT_ACCESS_TOKEN = cfg.getClientToken();
+    AMAP_CLIENT_HOST = cfg.getAmapHost();
+    AMAP_CLIENT_PORT = cfg.getAmapPort();
+    AMAP_KEY = cfg.getAmapKey();
+    AMAP_GET_PATH = cfg.getAmapGetPath();
+}
 
 // 消息结构
 struct MessageContext{
@@ -120,7 +208,7 @@ private:
         auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
         if (!res)
         {
-            std::cout << "发送失败" << std::endl;
+            std::cerr << "群聊消息发送失败" << std::endl;
         }else{
             std::cout << "HTTP状态码: " << res->status << std::endl;
         }
@@ -136,7 +224,7 @@ private:
         auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
         if (!res)
         {
-            std::cout << "发送失败" << std::endl;
+            std::cerr << "私聊消息发送失败" << std::endl;
         }else{
             std::cout << "HTTP状态码: " << res->status << std::endl;
         }
@@ -273,8 +361,8 @@ public:
         {
             city = city.substr(0, pos);
         }
-        httplib::Client cli(AMAP_CLIENT_URL, AMAP_CLIENT_PORT);
-        auto res = cli.Get(AMAP_GET_URL + "city=" + city + "&key=" + AMAP_KEY);
+        httplib::Client cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
+        auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
         if (res && res->status == 200)
         {
             // 先解析返回的JSON
@@ -306,6 +394,8 @@ public:
 
 int main()
 {
+    Config cfg;
+
     MessageManager m;
     m.cmd_manager.registerCommand(std::make_unique<TimeCommand>());
     m.cmd_manager.registerCommand(std::make_unique<WeatherCommand>());
