@@ -12,8 +12,8 @@
         "port": 5700,
         "access_token": ""
     },
-    "amap": {
-        "key": "你的高德API_Key",
+    "amap_api": {
+        "key": "your amp api key",
         "host": "restapi.amap.com",
         "port": 443,
         "path": "/v3/weather/weatherInfo"
