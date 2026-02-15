@@ -17,5 +17,14 @@
         "host": "restapi.amap.com",
         "port": 80,
         "path": "/v3/weather/weatherInfo"
+    },
+    "ai_api": {
+        "key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "model": "xxx",
+        "host": "api.siliconflow.cn",
+        "port": 443,
+        "path": "/v1/chat/completions",
+        "system_prompts": "",
+        "max_tokens": 4096
     }
 }
