@@ -283,7 +283,7 @@ public:
 ///////////
 // 各个指令
 ///////////
-// help
+// 帮助
 class HelpCommand : public Command{
 private:
     std::string cmd_list;
@@ -294,7 +294,7 @@ public:
     }
     std::string name() override
     {
-        return "help";
+        return "帮助";
     }
     std::string execute(std::string& args) override
     {
@@ -306,7 +306,7 @@ public:
         return;
     }
 };
-// time
+// 时间
 class TimeCommand : public Command{
 private:
     // 获取当前时间的函数
@@ -321,7 +321,7 @@ private:
 public:
     std::string name() override
     {
-        return "time";
+        return "时间";
     }
     std::string execute(std::string& args) override
     {
