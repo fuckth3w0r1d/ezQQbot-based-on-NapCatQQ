@@ -5,18 +5,18 @@
 using json = nlohmann::json;
 
 // config
-const std::string BOT_QQ = "1418954426";
-const std::string SERVER_HOST = "127.0.0.1";
-const int SERVER_PORT = 3000;
-const std::string SERVER_ACCESS_TOKEN = "cMWptHfojL-r0UjT";
-const std::string CLIENT_HOST = "0.0.0.0";
-const int CLIENT_PORT = 8080;
-const std::string CLIENT_ACCESS_TOKEN = "NIUbkatLjqd4XVvJ";
+const std::string BOT_QQ = "";
+const std::string SERVER_HOST = "";
+const int SERVER_PORT = 0;
+const std::string SERVER_ACCESS_TOKEN = "";
+const std::string CLIENT_HOST = "";
+const int CLIENT_PORT = 0;
+const std::string CLIENT_ACCESS_TOKEN = "";
 
-const std::string AMAP_KEY = "6e35a5dc22d14a96ef50c89e8546425b";
-const std::string AMAP_CLIENT_URL = "restapi.amap.com";
+const std::string AMAP_KEY = "";
+const std::string AMAP_CLIENT_URL = "";
 const int AMAP_CLIENT_PORT = 80;
-const std::string AMAP_GET_URL = "/v3/weather/weatherInfo?";
+const std::string AMAP_GET_URL = "";
 
 // 消息结构
 struct MessageContext{
