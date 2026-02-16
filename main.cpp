@@ -163,28 +163,29 @@ void getAllConfigVal()
     AI_MAX_TOKENS = cfg.getAIMaxTokens();
 }
 
+// 消息结构
+struct ParsedMsgSegments{
+    bool at_me = false;
+    bool has_text = false;
+    bool has_image = false;
+    bool has_json = false;
+
+    std::string text;        // 拼接后的纯文本
+    json json_data;          // 如果有分享卡片
+};
+struct MessageContext{
+    size_t group_id;
+    size_t user_id;
+    std::string msg_type;
+    json msg_segments;
+    ParsedMsgSegments pmsgsegs;
+};
+
 ////////////
 // 消息管理器
 ///////////
 class MessageManager{
 public:
-    // 消息结构
-    struct ParsedMsgSegments{
-        bool at_me = false;
-        bool has_text = false;
-        bool has_image = false;
-        bool has_json = false;
-
-        std::string text;        // 拼接后的纯文本
-        json json_data;          // 如果有分享卡片
-    };
-    struct MessageContext{
-        size_t group_id;
-        size_t user_id;
-        std::string msg_type;
-        json msg_segments;
-        ParsedMsgSegments pmsgsegs;
-    };
     // 群聊回复函数
     void send_group_msg(size_t group_id, const std::string& message)
     { 
@@ -276,141 +277,6 @@ public:
     virtual std::string name() = 0;
     virtual std::string execute(std::string& args) = 0;
     virtual ~Command() = default;
-};
-
-////////////
-// 文本指令管理器
-////////////
-class CommandManager{
-private: 
-    // 维护一个指令表，用于存储多种可支持的指令
-    std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
-
-public:
-    // 用于获取指令列表
-    std::string getCommandList()
-    {
-        std::string cmd_list = "";
-        for(const auto& cmd : cmd_map)
-        {
-            cmd_list += cmd.first + "\n"; 
-        }
-        // 去除最后一个回车符
-        cmd_list.pop_back();
-        return cmd_list;
-    }
-    // 注册一个用指令接口实现的指令
-    void registerCommand(std::unique_ptr<Command> cmd)
-    { 
-        cmd_map[cmd->name()] = std::move(cmd);
-    }
-
-    // 处理某个文本指令
-    std::string handleCommand(std::string& text)
-    {
-        // 去除可能的前置空格
-        while(!text.empty() && text[0] == ' ')
-        {
-            text.erase(0, 1);
-        }
-        if(text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
-        // 执行指令
-        // 先按照空格分割指令名称和参数
-        size_t pos = text.find(' ');
-        std::string cmd_name = text.substr(0, pos);
-        std::string cmd_args = (pos == std::string::npos) ? "" : text.substr(pos + 1);
-        if(cmd_map.count(cmd_name))
-        {
-            // 调用对应文本指令
-            return cmd_map[cmd_name]->execute(cmd_args);
-        }
-        return "未知指令: " + cmd_name;
-    }
-
-};
-
-//////////////
-// 总的任务管理器
-//////////////
-class TaskManager{
-public:
-    // 创建文本指令管理器
-    CommandManager cmd_manager;
-    // ...其他任务类型管理器 todo
-    // 总的任务处理函数
-    std::string handleTask(MessageManager::MessageContext& msgctx)
-    {
-        std::cout << "开始处理任务: " << msgctx.msg_segments.dump() << std::endl;
-        if(msgctx.msg_type == "private")
-        {
-            return "暂不支持私聊功能";
-        }else if(msgctx.msg_type == "group"){
-            // 既不是分享也不是被艾特时不处理
-            if(!msgctx.pmsgsegs.at_me && !msgctx.pmsgsegs.has_json) return "";
-            if(msgctx.pmsgsegs.has_json)
-            { ////////////// 处理分享 todo
-                return "";
-            }
-            // 处理被at时的文本指令
-            return cmd_manager.handleCommand(msgctx.pmsgsegs.text);
-        }
-        return "";
-    }
-};
-
-////////////
-// 总管理器
-////////////
-class Manager{
-private:
-    // 创建服务器
-    httplib::Server svr;
-    
-public:
-    // 创建任务管理器
-    TaskManager tsk_manager;
-    // 创建消息管理器
-    MessageManager msg_manager;
-    Manager()
-    {
-        // 注册 POST 路由
-        svr.Post("/", [this](const httplib::Request& req, httplib::Response& res){
-            this->handlePost(req, res);
-        });
-    }
-
-    // 启动服务器
-    void start()
-    {
-        svr.listen(CLIENT_HOST, CLIENT_PORT);
-    }
-
-    // 处理 POST 请求
-    void handlePost(const httplib::Request& req, httplib::Response& res)
-    {
-        // 先解析JSON
-        json data = json::parse(req.body);
-        std::cout << data.dump(4) << std::endl;
-        ////////////////////////////////////////////// 只处理消息事件, 其余事件todo
-        if (data["post_type"] != "message")
-        {
-            res.set_content("{}", "text/plain");
-            return;
-        }
-
-        // 调用消息管理器 构造 MessageContext
-        MessageManager::MessageContext msgctx;
-        msgctx = msg_manager.getMessageContext(data);
-        // 调用任务管理器 得到回复
-        std::string reply_msg = tsk_manager.handleTask(msgctx);
-        std::cout << "回复内容: " << reply_msg << std::endl;
-        if (!reply_msg.empty())
-        {
-            if(msgctx.msg_type == "group") msg_manager.send_group_msg(msgctx.group_id, reply_msg);
-            if(msgctx.msg_type == "private") msg_manager.send_private_msg(msgctx.user_id, reply_msg);
-        }
-        res.set_content("{}", "text/plain");
-    }
 };
 
 ///////////
@@ -636,14 +502,189 @@ public:
     }
 };
 
+///////////
+// 任务管理器接口
+///////////
+class BaseTaskManager{
+public:
+    virtual bool canHandle(const MessageContext& msgctx) = 0;
+    virtual std::string handleTask(MessageContext& msgctx) = 0;
+    virtual ~BaseTaskManager() = default;
+};
+
+///////////////////// 各个任务管理器
+////////////
+// 被at的文本任务管理器
+////////////
+class AtTaskManager : public BaseTaskManager{
+private: 
+    // 维护一个指令表，用于存储多种可支持的指令
+    std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
+
+public:
+    // 用于获取指令列表
+    std::string getCommandList()
+    {
+        std::string cmd_list = "帮助\n"; // 初始 list 带有帮助指令
+        for(const auto& cmd : cmd_map)
+        {
+            cmd_list += cmd.first + "\n"; 
+        }
+        // 去除最后一个回车符
+        cmd_list.pop_back();
+        return cmd_list;
+    }
+    // 注册一个用指令接口实现的指令
+    void registerCommand(std::unique_ptr<Command> cmd)
+    { 
+        cmd_map[cmd->name()] = std::move(cmd);
+    }
+
+    AtTaskManager()
+    {
+        // 注册各个指令
+        registerCommand(std::make_unique<TimeCommand>());
+        registerCommand(std::make_unique<WeatherCommand>());
+        registerCommand(std::make_unique<AICommand>());
+        registerCommand(std::make_unique<HelpCommand>(getCommandList()));
+    }
+
+    // 能否处理
+    bool canHandle(const MessageContext& msgctx) override
+    {
+        // 仅能处理群聊中被at的消息
+        return msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group");
+    }
+
+    // 处理某个文本指令
+    std::string handleTask(MessageContext& msgctx) override
+    {
+        // 去除可能的前置空格
+        while(!msgctx.pmsgsegs.text.empty() && msgctx.pmsgsegs.text[0] == ' ')
+        {
+            msgctx.pmsgsegs.text.erase(0, 1);
+        }
+        if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
+        // 执行指令
+        // 先按照空格分割指令名称和参数
+        size_t pos = msgctx.pmsgsegs.text.find(' ');
+        std::string cmd_name = msgctx.pmsgsegs.text.substr(0, pos);
+        std::string cmd_args = (pos == std::string::npos) ? "" : msgctx.pmsgsegs.text.substr(pos + 1);
+        if(cmd_map.count(cmd_name))
+        {
+            // 调用对应文本指令
+            return cmd_map[cmd_name]->execute(cmd_args);
+        }
+        return "未知指令: " + cmd_name;
+    }
+};
+
+//////////////
+// 分享消息任务管理器
+//////////////
+class JsonTaskManager : public BaseTaskManager{
+public:
+    bool canHandle(const MessageContext& msgctx) override
+    {
+        return msgctx.msg_type == "group" && msgctx.pmsgsegs.has_json;
+    }
+    std::string handleTask(MessageContext& msgctx) override
+    {
+        return "Json 任务测试";
+    }
+};
+
+//////////////
+// 总的任务管理器
+//////////////
+class TaskManager{
+private:
+    std::vector<std::unique_ptr<BaseTaskManager>> tsk_managers;
+public:
+    void registerTaskManager(std::unique_ptr<BaseTaskManager> tsk_manager)
+    {
+        tsk_managers.emplace_back(std::move(tsk_manager));
+    }
+    // 总的任务处理函数
+    std::string handleTask(MessageContext& msgctx)
+    {
+        std::cout << "开始处理任务: " << msgctx.msg_segments.dump() << std::endl;
+        for(auto& tsk_manager : tsk_managers)
+        {
+            if(tsk_manager->canHandle(msgctx))
+            {
+                // 按照能否处理自动分发任务处理器
+                return tsk_manager->handleTask(msgctx);
+            }
+        }
+        return "";
+    }
+};
+
+////////////
+// 总管理器
+////////////
+class Manager{
+private:
+    // 创建服务器
+    httplib::Server svr;
+    
+public:
+    // 创建任务管理器
+    TaskManager tsk_manager;
+    // 创建消息管理器
+    MessageManager msg_manager;
+    Manager()
+    {
+        // 注册 POST 路由
+        svr.Post("/", [this](const httplib::Request& req, httplib::Response& res){
+            this->handlePost(req, res);
+        });
+    }
+
+    // 启动服务器
+    void start()
+    {
+        svr.listen(CLIENT_HOST, CLIENT_PORT);
+    }
+
+    // 处理 POST 请求
+    void handlePost(const httplib::Request& req, httplib::Response& res)
+    {
+        // 先解析JSON
+        json data = json::parse(req.body);
+        std::cout << data.dump(4) << std::endl;
+        ////////////////////////////////////////////// 只处理消息事件, 其余事件todo
+        if (data["post_type"] != "message")
+        {
+            res.set_content("{}", "text/plain");
+            return;
+        }
+
+        // 调用消息管理器 构造 MessageContext
+        MessageContext msgctx;
+        msgctx = msg_manager.getMessageContext(data);
+        // 调用任务管理器 得到回复
+        std::string reply_msg = tsk_manager.handleTask(msgctx);
+        std::cout << "回复内容: " << reply_msg << std::endl;
+        if (!reply_msg.empty())
+        {
+            if(msgctx.msg_type == "group") msg_manager.send_group_msg(msgctx.group_id, reply_msg);
+            if(msgctx.msg_type == "private") msg_manager.send_private_msg(msgctx.user_id, reply_msg);
+        }
+        res.set_content("{}", "text/plain");
+    }
+};
+
 int main()
 {
     getAllConfigVal();
     Manager m;
-    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<TimeCommand>());
-    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<WeatherCommand>());
-    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<AICommand>());
-    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<HelpCommand>(m.tsk_manager.cmd_manager.getCommandList()));
+    // 创建被at时的文本指令管理器
+    m.tsk_manager.registerTaskManager(std::make_unique<AtTaskManager>());
+    // 创建分享的json任务管理器
+    m.tsk_manager.registerTaskManager(std::make_unique<JsonTaskManager>());
+    // ...其他任务类型管理器 todo
     m.start();
     return 0;
 }
