@@ -163,97 +163,28 @@ void getAllConfigVal()
     AI_MAX_TOKENS = cfg.getAIMaxTokens();
 }
 
-// 消息结构
-struct MessageContext{
-    size_t group_id;
-    size_t user_id;
-    std::string msg_type;
-    std::string raw_msg;
-};
-
-//////////
-// 指令接口
-//////////
-class Command{
-public:
-    virtual std::string name() = 0;
-    virtual std::string execute(std::string& args) = 0;
-    virtual ~Command() = default;
-};
-
-////////////
-// 指令管理器
-////////////
-class CommandManager{
-private: 
-    // 维护一个指令表，用于存储多种可支持的指令
-    std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
-
-public:
-    // 用于获取指令列表
-    std::string getCommandList()
-    {
-        std::string cmd_list = "";
-        for(const auto& cmd : cmd_map)
-        {
-            cmd_list += cmd.first + "\n"; 
-        }
-        // 去除最后一个回车符
-        cmd_list.pop_back();
-        return cmd_list;
-    }
-    // 注册一个用指令接口实现的指令
-    void registerCommand(std::unique_ptr<Command> cmd)
-    { 
-        cmd_map[cmd->name()] = std::move(cmd);
-    }
-
-    // 处理某个指令
-    std::string handleCommand(MessageContext& msgctx)
-    {
-        std::cout << "开始处理指令: " << msgctx.raw_msg << std::endl;
-        if(msgctx.msg_type == "private")
-        {
-            return "暂不支持私聊功能";
-        }else if(msgctx.msg_type == "group"){
-            // 先去除艾特的代码, 只处理被 at 的消息 //////////////////////////////////// 其他消息todo
-            std::string at_code = "[CQ:at,qq=" + BOT_QQ + "]";
-            size_t pos = msgctx.raw_msg.find(at_code);
-            if(pos != std::string::npos)
-            {
-                msgctx.raw_msg.erase(pos, at_code.length());
-            }else{ /// 只处理被@的消息
-                return "";
-            }
-            // 去除可能的前置空格
-            while(!msgctx.raw_msg.empty() && msgctx.raw_msg[0] == ' ')
-            {
-                msgctx.raw_msg.erase(0, 1);
-            }
-            if(msgctx.raw_msg.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
-            // 执行指令
-            // 先按照空格分割指令名称和参数
-            pos = msgctx.raw_msg.find(' ');
-            std::string cmd_name = msgctx.raw_msg.substr(0, pos);
-            std::string cmd_args = (pos == std::string::npos) ? "" : msgctx.raw_msg.substr(pos + 1);
-            if(cmd_map.count(cmd_name))
-            {
-                return cmd_map[cmd_name]->execute(cmd_args);
-            }else{
-                return "未知指令: " + cmd_name;
-            }
-        }
-        return "";
-    }
-
-};
-
 ////////////
 // 消息管理器
-////////////
+///////////
 class MessageManager{
-private:
-    httplib::Server svr;
+public:
+    // 消息结构
+    struct ParsedMsgSegments{
+        bool at_me = false;
+        bool has_text = false;
+        bool has_image = false;
+        bool has_json = false;
+
+        std::string text;        // 拼接后的纯文本
+        json json_data;          // 如果有分享卡片
+    };
+    struct MessageContext{
+        size_t group_id;
+        size_t user_id;
+        std::string msg_type;
+        json msg_segments;
+        ParsedMsgSegments pmsgsegs;
+    };
     // 群聊回复函数
     void send_group_msg(size_t group_id, const std::string& message)
     { 
@@ -287,15 +218,164 @@ private:
             std::cout << "HTTP状态码: " << res->status << std::endl;
         }
     }
-public:
-    // 创建指令管理器
-    CommandManager cmd_manager;
+    // 消息段解析
+    ParsedMsgSegments parseMsgSegments(json& msgsegs)
+    {
+        ParsedMsgSegments result;
+        for(auto& seg : msgsegs)
+        {
+            if(!seg.contains("type") || !seg.contains("data")) continue;
+            std::string type = seg["type"].get<std::string>();
+            if(type == "at")
+            {
+                if(seg["data"].contains("qq") && seg["data"]["qq"] == BOT_QQ) 
+                    result.at_me = true;
+            }
+            if(type == "text")
+            {
+                if (seg["data"].contains("text"))
+                {
+                    result.has_text = true;
+                    result.text += seg["data"]["text"].get<std::string>();
+                }
+            }
+            if(type == "image")
+            {
+                result.has_image = true;
+            }
+            if(type == "json")
+            {
+                result.has_json = true;
+                if(seg["data"].contains("data"))
+                {
+                    result.json_data = json::parse(seg["data"]["data"].get<std::string>());
+                }
+            }
+        }
+        return result;
+    }
+    // 获取消息结构
+    MessageContext getMessageContext(json& data)
+    {
+        MessageContext msgctx;
+        msgctx.msg_type = data["message_type"];
+        if (msgctx.msg_type == "group") msgctx.group_id = data["group_id"]; // 私聊没有 group_id
+        msgctx.user_id = data["user_id"];
+        msgctx.msg_segments = data["message"];
+        msgctx.pmsgsegs = parseMsgSegments(msgctx.msg_segments);
+        return msgctx;
+    }
+};
 
-    MessageManager()
+
+//////////
+// 文本指令接口
+//////////
+class Command{
+public:
+    virtual std::string name() = 0;
+    virtual std::string execute(std::string& args) = 0;
+    virtual ~Command() = default;
+};
+
+////////////
+// 文本指令管理器
+////////////
+class CommandManager{
+private: 
+    // 维护一个指令表，用于存储多种可支持的指令
+    std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
+
+public:
+    // 用于获取指令列表
+    std::string getCommandList()
+    {
+        std::string cmd_list = "";
+        for(const auto& cmd : cmd_map)
+        {
+            cmd_list += cmd.first + "\n"; 
+        }
+        // 去除最后一个回车符
+        cmd_list.pop_back();
+        return cmd_list;
+    }
+    // 注册一个用指令接口实现的指令
+    void registerCommand(std::unique_ptr<Command> cmd)
+    { 
+        cmd_map[cmd->name()] = std::move(cmd);
+    }
+
+    // 处理某个文本指令
+    std::string handleCommand(std::string& text)
+    {
+        // 去除可能的前置空格
+        while(!text.empty() && text[0] == ' ')
+        {
+            text.erase(0, 1);
+        }
+        if(text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
+        // 执行指令
+        // 先按照空格分割指令名称和参数
+        size_t pos = text.find(' ');
+        std::string cmd_name = text.substr(0, pos);
+        std::string cmd_args = (pos == std::string::npos) ? "" : text.substr(pos + 1);
+        if(cmd_map.count(cmd_name))
+        {
+            // 调用对应文本指令
+            return cmd_map[cmd_name]->execute(cmd_args);
+        }
+        return "未知指令: " + cmd_name;
+    }
+
+};
+
+//////////////
+// 总的任务管理器
+//////////////
+class TaskManager{
+public:
+    // 创建文本指令管理器
+    CommandManager cmd_manager;
+    // ...其他任务类型管理器 todo
+    // 总的任务处理函数
+    std::string handleTask(MessageManager::MessageContext& msgctx)
+    {
+        std::cout << "开始处理任务: " << msgctx.msg_segments.dump() << std::endl;
+        if(msgctx.msg_type == "private")
+        {
+            return "暂不支持私聊功能";
+        }else if(msgctx.msg_type == "group"){
+            // 既不是分享也不是被艾特时不处理
+            if(!msgctx.pmsgsegs.at_me && !msgctx.pmsgsegs.has_json) return "";
+            if(msgctx.pmsgsegs.has_json)
+            { ////////////// 处理分享 todo
+                return "";
+            }
+            // 处理被at时的文本指令
+            return cmd_manager.handleCommand(msgctx.pmsgsegs.text);
+        }
+        return "";
+    }
+};
+
+////////////
+// 总管理器
+////////////
+class Manager{
+private:
+    // 创建服务器
+    httplib::Server svr;
+    
+public:
+    // 创建任务管理器
+    TaskManager tsk_manager;
+    // 创建消息管理器
+    MessageManager msg_manager;
+    Manager()
     {
         // 注册 POST 路由
         svr.Post("/", [this](const httplib::Request& req, httplib::Response& res){
-            this->handle_post(req, res);
+            this->handlePost(req, res);
         });
     }
 
@@ -306,7 +386,7 @@ public:
     }
 
     // 处理 POST 请求
-    void handle_post(const httplib::Request& req, httplib::Response& res)
+    void handlePost(const httplib::Request& req, httplib::Response& res)
     {
         // 先解析JSON
         json data = json::parse(req.body);
@@ -318,27 +398,23 @@ public:
             return;
         }
 
-        // 构造 MessageContext
-        MessageContext msgctx;
-        msgctx.msg_type = data["message_type"];
-        if (msgctx.msg_type == "group") msgctx.group_id = data["group_id"]; // 私聊没有 group_id
-        msgctx.user_id = data["user_id"];
-        msgctx.raw_msg = data["raw_message"];
-
-        // 调用指令管理器
-        std::string reply_msg = cmd_manager.handleCommand(msgctx);
+        // 调用消息管理器 构造 MessageContext
+        MessageManager::MessageContext msgctx;
+        msgctx = msg_manager.getMessageContext(data);
+        // 调用任务管理器 得到回复
+        std::string reply_msg = tsk_manager.handleTask(msgctx);
         std::cout << "回复内容: " << reply_msg << std::endl;
         if (!reply_msg.empty())
         {
-            if(msgctx.msg_type == "group") send_group_msg(msgctx.group_id, reply_msg);
-            if(msgctx.msg_type == "private") send_private_msg(msgctx.user_id, reply_msg);
+            if(msgctx.msg_type == "group") msg_manager.send_group_msg(msgctx.group_id, reply_msg);
+            if(msgctx.msg_type == "private") msg_manager.send_private_msg(msgctx.user_id, reply_msg);
         }
         res.set_content("{}", "text/plain");
     }
 };
 
 ///////////
-// 各个指令
+// 各个文本指令
 ///////////
 // 帮助
 class HelpCommand : public Command{
@@ -563,11 +639,11 @@ public:
 int main()
 {
     getAllConfigVal();
-    MessageManager m;
-    m.cmd_manager.registerCommand(std::make_unique<TimeCommand>());
-    m.cmd_manager.registerCommand(std::make_unique<WeatherCommand>());
-    m.cmd_manager.registerCommand(std::make_unique<AICommand>());
-    m.cmd_manager.registerCommand(std::make_unique<HelpCommand>(m.cmd_manager.getCommandList()));
+    Manager m;
+    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<TimeCommand>());
+    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<WeatherCommand>());
+    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<AICommand>());
+    m.tsk_manager.cmd_manager.registerCommand(std::make_unique<HelpCommand>(m.tsk_manager.cmd_manager.getCommandList()));
     m.start();
     return 0;
 }
