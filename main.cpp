@@ -27,6 +27,11 @@ std::string AI_POST_PATH;
 std::string AI_MODEL;
 std::string AI_SYS_PROMPTS;
 int AI_MAX_TOKENS;
+// bilibili
+std::string B23_APP_ID;
+std::string B23_CLIENT_HOST;
+int B23_CLIENT_PORT;
+std::string B23_GET_PATH;
 
 ////////////////////
 // 用于获取 config 信息
@@ -135,6 +140,26 @@ public:
     {
         return data["ai_api"]["max_tokens"].get<const int>();
     }
+
+    const std::string getB23Appid()
+    {
+        return data["b23"]["app_id"].get<const std::string>();
+    }
+
+    const std::string getB23Host()
+    {
+        return data["b23"]["host"].get<const std::string>();
+    }
+
+    const int getB23Port()
+    {
+        return data["b23"]["port"].get<const int>();
+    }
+
+    const std::string getB23GetPath()
+    {
+        return data["b23"]["path"].get<const std::string>();
+    }
 };
 
 void getAllConfigVal()
@@ -161,6 +186,11 @@ void getAllConfigVal()
     AI_MODEL = cfg.getAIModel();
     AI_SYS_PROMPTS = cfg.getAISysPrompts();
     AI_MAX_TOKENS = cfg.getAIMaxTokens();
+    // bilibili
+    B23_APP_ID = cfg.getB23Appid();
+    B23_CLIENT_HOST = cfg.getB23Host();
+    B23_CLIENT_PORT = cfg.getB23Port();
+    B23_GET_PATH = cfg.getB23GetPath();
 }
 
 // 消息结构
@@ -170,8 +200,8 @@ struct ParsedMsgSegments{
     bool has_image = false;
     bool has_json = false;
 
-    std::string text;        // 拼接后的纯文本
-    json json_data;          // 如果有分享卡片
+    std::string text;        // 文本
+    json json_data;          // json
 };
 struct MessageContext{
     size_t group_id;
@@ -199,6 +229,7 @@ public:
         if (!res)
         {
             std::cerr << "群聊消息发送失败" << std::endl;
+            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
         }else{
             std::cout << "HTTP状态码: " << res->status << std::endl;
         }
@@ -215,6 +246,7 @@ public:
         if (!res)
         {
             std::cerr << "私聊消息发送失败" << std::endl;
+            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
         }else{
             std::cout << "HTTP状态码: " << res->status << std::endl;
         }
@@ -381,6 +413,9 @@ public:
             result += "湿度: " + data["humidity"].get<std::string>() + "%\n";
             result += "查询时间: " + data["reporttime"].get<std::string>();
             return result;
+        }else{
+            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            return "天气请求失败";
         }
         return "天气请求失败";
     }
@@ -429,6 +464,7 @@ private:
         if(!res)
         {
             return "网络请求失败";
+            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
         }else{
             std::cout << "HTTP状态码: " << res->status << std::endl;
             if(res->status == 200)
@@ -546,6 +582,7 @@ public:
         registerCommand(std::make_unique<TimeCommand>());
         registerCommand(std::make_unique<WeatherCommand>());
         registerCommand(std::make_unique<AICommand>());
+        // 后续文本指令也在此注册
         registerCommand(std::make_unique<HelpCommand>(getCommandList()));
     }
 
@@ -580,17 +617,135 @@ public:
 };
 
 //////////////
-// 分享消息任务管理器
+// JSON消息任务管理器
 //////////////
 class JsonTaskManager : public BaseTaskManager{
+private:
+    // B站视频信息结构
+    struct BVinfo{
+        std::string title;
+        std::string bvid;
+        std::string up; // up主昵称
+        std::string face; // 头像url
+        int view; // 观看次数
+        int reply; // 评论数
+        int favorite; // 收藏数
+        int coin; // 投币数
+        int share; // 分享数
+        int like; // 点赞数
+    };
+    // 获取 bvid
+    std::string getBVid(json& data)
+    {
+        std::string qqdocurl = data["meta"]["detail_1"]["qqdocurl"].get<std::string>();
+        size_t pos = qqdocurl.find("://");
+        // 字符串处理, 先去除https://头
+        std::string no_proto = (pos != std::string::npos) ? qqdocurl.substr(pos + 3) : qqdocurl;
+        pos = no_proto.find("/");
+        // 找到qq分享的b站视频链接的 host 和 path
+        std::string host = no_proto.substr(0, pos);
+        std::string path = no_proto.substr(pos);
+        httplib::SSLClient cli(host, 443); // 默认443端口
+        auto res = cli.Head(path); // 这里仅为了获取重定向后的url, 所以用Head
+        if(!res)
+        {
+            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            return "B站视频短链请求失败";
+        }
+        std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
+        size_t bvid_start_pos = real_url.find("BV");
+        if(bvid_start_pos == std::string::npos)
+        {
+            return "重定向 url 异常";
+        }
+        std::string bvid = real_url.substr(bvid_start_pos, 12); // bvid长度为12
+        return bvid;
+    }
+    // 获取B站视频信息
+    BVinfo getBVinfo(json& raw_data)
+    {
+        BVinfo bvinfo;
+        json& data = raw_data["data"];
+        // 获取bvid
+        bvinfo.bvid = data["bvid"].get<std::string>();
+        // 获取视频标题
+        bvinfo.title = data["title"].get<std::string>();
+        // 获取up昵称
+        bvinfo.up = data["owner"]["name"].get<std::string>();
+        // 获取up头像url
+        bvinfo.face = data["owner"]["face"].get<std::string>();
+        // 获取观看次数
+        bvinfo.view = data["stat"]["view"].get<int>();
+        // 获取评论数
+        bvinfo.reply = data["stat"]["reply"].get<int>();
+        // 获取收藏数
+        bvinfo.favorite = data["stat"]["favorite"].get<int>();
+        // 获取投币数
+        bvinfo.coin = data["stat"]["coin"].get<int>();
+        // 获取分享数
+        bvinfo.share = data["stat"]["share"].get<int>();
+        // 获取点赞数
+        bvinfo.like = data["stat"]["like"].get<int>();
+        return bvinfo;
+    }
+    // 处理B站视频
+    std::string handleB23(json& data)
+    {
+        std::string bvid = getBVid(data);
+        httplib::SSLClient cli(B23_CLIENT_HOST, B23_CLIENT_PORT);
+        auto res = cli.Get(B23_GET_PATH + "?bvid=" + bvid);
+        if (!res)
+        {
+            std::cerr << "bvid: " << bvid << std::endl;
+            std::cerr << "错误响应体: " << res->body << std::endl;
+            return "网络请求失败";
+        }
+        if(res->status != 200)
+        {
+            std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            return "获取视频信息失败";
+        }
+        json raw_bvinfo = json::parse(res->body);
+        if(raw_bvinfo["code"].get<int>() != 0 && raw_bvinfo["message"].get<std::string>() != "OK")
+        {
+            std::cerr << "bvid: " << bvid << std::endl;
+            std::cerr << "错误响应体: " << res->body << std::endl;
+            return "获取视频信息失败";
+        }
+        BVinfo bvinfo = getBVinfo(raw_bvinfo);
+        std::string result;
+        result = "视频标题: " + bvinfo.title;
+        result += "\nup主: " + bvinfo.up;
+        result += "\n头像: " + bvinfo.face;
+        result += "\nbvid: " + bvinfo.bvid;
+        result += "\n观看次数: " + std::to_string(bvinfo.view);
+        result += "\n评论数: " + std::to_string(bvinfo.reply);
+        result += "\n收藏数: " + std::to_string(bvinfo.favorite);
+        result += "\n投币数: " + std::to_string(bvinfo.coin);
+        result += "\n分享数: " + std::to_string(bvinfo.share);
+        result += "\n点赞数: " + std::to_string(bvinfo.like);
+        return result;
+    }
 public:
     bool canHandle(const MessageContext& msgctx) override
     {
-        return msgctx.msg_type == "group" && msgctx.pmsgsegs.has_json;
+        // 当群聊消息类型为 json 时能处理
+        return (msgctx.msg_type == "group") && msgctx.pmsgsegs.has_json;
     }
     std::string handleTask(MessageContext& msgctx) override
     {
-        return "Json 任务测试";
+        json& data = msgctx.pmsgsegs.json_data;
+        if(data.contains("meta"))
+        {
+            if(data["meta"].contains("detail_1"))
+            {
+                if(data["meta"]["detail_1"]["appid"].get<std::string>() == B23_APP_ID)
+                { // 暂时只处理B站分享视频
+                    return handleB23(data);
+                }
+            }
+        }
+        return "";
     }
 };
 
