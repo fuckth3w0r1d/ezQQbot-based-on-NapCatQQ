@@ -26,5 +26,11 @@
         "path": "/v1/chat/completions",
         "system_prompts": "",
         "max_tokens": 4096
+    },
+    "b23": {
+        "app_id": "1109937557",
+        "host": "api.bilibili.com",
+        "port": 443,
+        "path": "/x/web-interface/view"
     }
 }
