@@ -371,16 +371,13 @@ public:
 };
 // 天气
 class WeatherCommand : public Command{
-public:
-    std::string name() override
-    {
-        return "天气";
-    }
-    std::string execute(std::string& args) override
+private:
+    // 简单提取城市名称
+    std::string getCityName(std::string& args)
     {
         if (args.empty()) 
         {
-            return "请输入城市名, 例如: 天气 北京";
+            return "";
         }
         std::string city = args;
         // 去除可能的前置空格
@@ -399,6 +396,42 @@ public:
         {
             city = city.substr(0, pos);
         }
+        return city;
+    }
+
+    // 天气信息结构体
+    struct Weatherinfo{
+        std::string city; // 城市
+        std::string weather; // 天气
+        std::string temper; // 温度
+        std::string winddir; // 风向
+        std::string windpow; // 风力
+        std::string humidity; // 湿度
+        std::string reporttime; // 查询时间
+    };
+    // 获取天气信息
+    Weatherinfo getWeatherinfo(json& raw_data)
+    {
+        Weatherinfo result;
+        json& data = raw_data["lives"][0];
+        result.city = data["province"].get<std::string>() + " "
+            + data["city"].get<std::string>();
+        result.weather = data["weather"].get<std::string>();
+        result.temper = data["temperature"].get<std::string>();
+        result.winddir = data["winddirection"].get<std::string>();
+        result.windpow = data["windpower"].get<std::string>();
+        result.humidity = data["humidity"].get<std::string>();
+        result.reporttime = data["reporttime"].get<std::string>();
+        return result;
+    }
+public:
+    std::string name() override
+    {
+        return "天气";
+    }
+    std::string execute(std::string& args) override
+    {
+        std::string city = getCityName(args);
         httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
         auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
         if(!res)
@@ -418,15 +451,13 @@ public:
         {
             return "天气查询失败, 请输入正确的格式: 天气 城市名称\n暂时只支持国内城市";
         }
-        auto data = raw_data["lives"][0];
-        std::string result = "城市: " + data["province"].get<std::string>() + " "
-            + data["city"].get<std::string>() + "\n";
-        result += "天气: " + data["weather"].get<std::string>() + "\n";
-        result += "温度: " + data["temperature"].get<std::string>() + "℃\n";
-        result += "风向: " + data["winddirection"].get<std::string>() + "风 "
-            + data["windpower"].get<std::string>() + "级\n";;
-        result += "湿度: " + data["humidity"].get<std::string>() + "%\n";
-        result += "查询时间: " + data["reporttime"].get<std::string>();
+        Weatherinfo winfo = getWeatherinfo(raw_data);
+        std::string result = "城市: " + winfo.city;
+        result += "\n天气: " + winfo.weather;
+        result += "\n温度: " + winfo.temper + "℃";
+        result += "\n风向: " + winfo.winddir + "风 " + winfo.windpow + "级";
+        result += "\n湿度: " + winfo.humidity + "%";
+        result += "\n查询时间: " + winfo.reporttime;
         return result;
     }
     ~WeatherCommand() override
@@ -438,6 +469,22 @@ public:
 // AI对话
 class AICommand : public Command{
 private:
+    // AI回复信息结构体
+    struct AIinfo{
+        std::string model;
+        std::string reply;
+        int tokens;
+    };
+    // 获取回复信息
+    AIinfo getAIinfo(json& raw_data)
+    {
+        AIinfo result;
+        result.model = raw_data["model"].get<std::string>();
+        result.reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        result.tokens = raw_data["usage"]["total_tokens"].get<int>();
+        return result;
+    }
+    // 与AI交互
     std::string askAI(std::string& args)
     {
         httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
@@ -482,50 +529,17 @@ private:
             std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
             return "AI请求异常";
         }
-        json result = json::parse(res->body);
-        // 硅基流动api reponse 结构示例
-        // {
-        //     "id": "019bdaa55225ef854b320e9b838f77ce",
-        //     "object": "chat.completion",
-        //     "created": 1768899826,
-        //     "model": "Pro/zai-org/GLM-4.7",
-        //     "choices": [
-        //         {
-        //         "index": 0,
-        //         "message": {
-        //             "role": "assistant",
-        //             "content": "你好！...",
-        //             "reasoning_content": "..."
-        //         },
-        //         "finish_reason": "stop"
-        //         }
-        //     ],
-        //     "usage": {
-        //         "prompt_tokens": 15,
-        //         "completion_tokens": 1540,
-        //         "total_tokens": 1555,
-        //         "completion_tokens_details": {
-        //         "reasoning_tokens": 1190
-        //         },
-        //         "prompt_tokens_details": {
-        //         "cached_tokens": 0
-        //         },
-        //         "prompt_cache_hit_tokens": 0,
-        //         "prompt_cache_miss_tokens": 15
-        //     },
-        //     "system_fingerprint": ""
-        // }
-        if (result.contains("choices") && !result["choices"].empty())
+        json raw_data = json::parse(res->body);
+        if (!raw_data.contains("choices") || raw_data["choices"].empty())
         {
-            auto& choices = result["choices"][0];
-            auto& usage = result["usage"];
-            std::string ai_reply = choices["message"]["content"].get<std::string>();
-            std::string total_tokens = std::to_string(usage["total_tokens"].get<int>());
-            std::string reply = "模型: " + result["model"].get<std::string>() 
-                + "\nAI回复内容: " + ai_reply + "\n使用 token: " + total_tokens;
-            return reply;
+            std::cerr << "异常响应体: " << raw_data.dump(4) << std::endl;
+            return "AI 回复异常";
         }
-        return "AI 回复异常";
+        AIinfo ainfo = getAIinfo(raw_data);
+        std::string reply = "模型: " + ainfo.model; 
+        reply += "\nAI回复内容: " + ainfo.reply;
+        reply += "\n使用 token: " + std::to_string(ainfo.tokens);
+        return reply;
     }
 public:
     std::string name() override
@@ -675,25 +689,15 @@ private:
     {
         BVinfo bvinfo;
         json& data = raw_data["data"];
-        // 获取bvid
         bvinfo.bvid = data["bvid"].get<std::string>();
-        // 获取视频标题
         bvinfo.title = data["title"].get<std::string>();
-        // 获取up昵称
         bvinfo.up = data["owner"]["name"].get<std::string>();
-        // 获取up头像url
         bvinfo.face = data["owner"]["face"].get<std::string>();
-        // 获取观看次数
         bvinfo.view = data["stat"]["view"].get<int>();
-        // 获取评论数
         bvinfo.reply = data["stat"]["reply"].get<int>();
-        // 获取收藏数
         bvinfo.favorite = data["stat"]["favorite"].get<int>();
-        // 获取投币数
         bvinfo.coin = data["stat"]["coin"].get<int>();
-        // 获取分享数
         bvinfo.share = data["stat"]["share"].get<int>();
-        // 获取点赞数
         bvinfo.like = data["stat"]["like"].get<int>();
         return bvinfo;
     }
@@ -716,6 +720,11 @@ private:
             return "获取视频信息失败";
         }
         json raw_bvinfo = json::parse(res->body);
+        if(raw_bvinfo["code"].get<int>() != 0 || raw_bvinfo["message"].get<std::string>() != "OK")
+        {
+            std::cerr << "bvid: " << bvid << std::endl;
+            return "获取视频信息失败";
+        }
         BVinfo bvinfo = getBVinfo(raw_bvinfo);
         std::string result;
         result = "视频标题: " + bvinfo.title;
