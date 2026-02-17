@@ -1,197 +1,50 @@
-#include <bits/stdc++.h>
+#include <iostream>      
+#include <string>        
+#include <vector>        
+#include <memory>        
+#include <unordered_map> 
+#include <ctime>         
+#include <cstddef>  
+
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
 #include "json.hpp"
 
+#include "config.h"
+#include "logger.h"
+
 using json = nlohmann::json;
 
-//////////////////////// config
+///////////
+// config
+///////////
+Config cfg;
 // naocatqq
-std::string BOT_QQ;
-std::string SERVER_HOST;
-int SERVER_PORT;
-std::string SERVER_ACCESS_TOKEN;
-std::string CLIENT_HOST;
-int CLIENT_PORT;
-std::string CLIENT_ACCESS_TOKEN;
+const std::string BOT_QQ = cfg.getBotqq();
+const std::string SERVER_HOST = cfg.getServerHost();
+const int SERVER_PORT = cfg.getServerPort();
+const std::string SERVER_ACCESS_TOKEN = cfg.getServerToken();
+const std::string CLIENT_HOST = cfg.getClientHost();
+const int CLIENT_PORT = cfg.getClientPort();
+const std::string CLIENT_ACCESS_TOKEN = cfg.getClientToken();
 // amap
-std::string AMAP_KEY;
-std::string AMAP_CLIENT_HOST;
-int AMAP_CLIENT_PORT;
-std::string AMAP_GET_PATH;
+const std::string AMAP_KEY = cfg.getAmapKey();
+const std::string AMAP_CLIENT_HOST = cfg.getAmapHost();
+const int AMAP_CLIENT_PORT = cfg.getAmapPort();
+const std::string AMAP_GET_PATH = cfg.getAmapGetPath();
 // ai
-std::string AI_KEY;
-std::string AI_CLIENT_HOST;
-int AI_CLIENT_PORT;
-std::string AI_POST_PATH;
-std::string AI_MODEL;
-std::string AI_SYS_PROMPTS;
-int AI_MAX_TOKENS;
+const std::string AI_KEY = cfg.getAIKey();
+const std::string AI_CLIENT_HOST = cfg.getAIHost();
+const int AI_CLIENT_PORT = cfg.getAIPort();
+const std::string AI_POST_PATH = cfg.getAIPostPath();
+const std::string AI_MODEL = cfg.getAIModel();
+const std::string AI_SYS_PROMPTS = cfg.getAISysPrompts();
+const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
 // bilibili
-std::string B23_APP_ID;
-std::string B23_CLIENT_HOST;
-int B23_CLIENT_PORT;
-std::string B23_GET_PATH;
-
-////////////////////
-// 用于获取 config 信息
-///////////////////
-class Config{
-private:
-    json data;
-
-public:
-    Config()
-    {
-        std::ifstream file("config.json");
-        if (!file.is_open()) 
-        {
-            std::cerr << "无法打开文件" << std::endl;
-        }
-        data = json::parse(file);
-    }
-
-    const std::string getBotqq()
-    {
-        return data["bot"]["qq"].get<const std::string>();
-    }
-
-    const std::string getServerHost()
-    {
-        return data["server"]["host"].get<const std::string>();
-    }
-
-    const int getServerPort()
-    {
-        return data["server"]["port"].get<const int>();
-    }
-
-    const std::string getServerToken()
-    {
-        return data["server"]["access_token"].get<const std::string>();
-    }
-
-    const std::string getClientHost()
-    {
-        return data["client"]["host"].get<const std::string>();
-    }
-
-    const int getClientPort()
-    {
-        return data["client"]["port"].get<const int>();
-    }
-
-    const std::string getClientToken()
-    {
-        return data["client"]["access_token"].get<const std::string>();
-    }
-
-    const std::string getAmapKey()
-    {
-        return data["amap_api"]["key"].get<const std::string>();
-    }
-
-    const std::string getAmapHost()
-    {
-        return data["amap_api"]["host"].get<const std::string>();
-    }
-
-    const int getAmapPort()
-    {
-        return data["amap_api"]["port"].get<const int>();
-    }
-
-    const std::string getAmapGetPath()
-    {
-        return data["amap_api"]["path"].get<const std::string>();
-    }
-
-    const std::string getAIKey()
-    {
-        return data["ai_api"]["key"].get<const std::string>();
-    }
-
-    const std::string getAIHost()
-    {
-        return data["ai_api"]["host"].get<const std::string>();
-    }
-
-    const int getAIPort()
-    {
-        return data["ai_api"]["port"].get<const int>();
-    }
-
-    const std::string getAIPostPath()
-    {
-        return data["ai_api"]["path"].get<const std::string>();
-    }
-
-    const std::string getAIModel()
-    {
-        return data["ai_api"]["model"].get<const std::string>();
-    }
-
-    const std::string getAISysPrompts()
-    {
-        return data["ai_api"]["system_prompts"].get<const std::string>();
-    }
-
-    const int getAIMaxTokens()
-    {
-        return data["ai_api"]["max_tokens"].get<const int>();
-    }
-
-    const std::string getB23Appid()
-    {
-        return data["b23"]["app_id"].get<const std::string>();
-    }
-
-    const std::string getB23Host()
-    {
-        return data["b23"]["host"].get<const std::string>();
-    }
-
-    const int getB23Port()
-    {
-        return data["b23"]["port"].get<const int>();
-    }
-
-    const std::string getB23GetPath()
-    {
-        return data["b23"]["path"].get<const std::string>();
-    }
-};
-
-void getAllConfigVal()
-{
-    Config cfg;
-    // napcatqq
-    BOT_QQ = cfg.getBotqq();
-    SERVER_HOST = cfg.getServerHost();
-    SERVER_PORT = cfg.getServerPort();
-    SERVER_ACCESS_TOKEN = cfg.getServerToken();
-    CLIENT_HOST = cfg.getClientHost();
-    CLIENT_PORT = cfg.getClientPort();
-    CLIENT_ACCESS_TOKEN = cfg.getClientToken();
-    // amap
-    AMAP_CLIENT_HOST = cfg.getAmapHost();
-    AMAP_CLIENT_PORT = cfg.getAmapPort();
-    AMAP_KEY = cfg.getAmapKey();
-    AMAP_GET_PATH = cfg.getAmapGetPath();
-    // ai
-    AI_CLIENT_HOST = cfg.getAIHost();
-    AI_CLIENT_PORT = cfg.getAIPort();
-    AI_KEY = cfg.getAIKey();
-    AI_POST_PATH = cfg.getAIPostPath();
-    AI_MODEL = cfg.getAIModel();
-    AI_SYS_PROMPTS = cfg.getAISysPrompts();
-    AI_MAX_TOKENS = cfg.getAIMaxTokens();
-    // bilibili
-    B23_APP_ID = cfg.getB23Appid();
-    B23_CLIENT_HOST = cfg.getB23Host();
-    B23_CLIENT_PORT = cfg.getB23Port();
-    B23_GET_PATH = cfg.getB23GetPath();
-}
+const std::string B23_APP_ID = cfg.getB23Appid();
+const std::string B23_CLIENT_HOST = cfg.getB23Host();
+const int B23_CLIENT_PORT = cfg.getB23Port();
+const std::string B23_GET_PATH = cfg.getB23GetPath();
 
 // 消息结构
 struct ParsedMsgSegments{
@@ -228,13 +81,12 @@ public:
         auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
         if (!res)
         {
-            std::cerr << "群聊消息发送失败" << std::endl;
-            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
         }
         if(res->status != 200)
         {
-            std::cerr << "HTTP 状态码: " << res->status << std::endl;
-            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            Logger::warn("send_group_msg HTTP状态码: ", res->status);
+            Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
         }
     }
     // 私聊回复函数
@@ -248,17 +100,16 @@ public:
         auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
         if (!res)
         {
-            std::cerr << "私聊消息发送失败" << std::endl;
-            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
         }
         if(res->status != 200)
         {
-            std::cerr << "HTTP 状态码: " << res->status << std::endl;
-            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            Logger::warn("send_private_msg HTTP状态码: ", res->status);
+            Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
         }
     }
     // 消息段解析
-    ParsedMsgSegments parseMsgSegments(json& msgsegs)
+    ParsedMsgSegments parseMsgSegments(const json& msgsegs)
     {
         ParsedMsgSegments result;
         for(auto& seg : msgsegs)
@@ -291,10 +142,14 @@ public:
                 }
             }
         }
+        while(!result.text.empty() && result.text[0] == ' ')
+        {   // 去除文本消息的前置空格
+            result.text.erase(0, 1);
+        }
         return result;
     }
     // 获取消息结构
-    MessageContext getMessageContext(json& data)
+    MessageContext getMessageContext(const json& data)
     {
         MessageContext msgctx;
         msgctx.msg_type = data["message_type"];
@@ -313,7 +168,7 @@ public:
 class Command{
 public:
     virtual std::string name() = 0;
-    virtual std::string execute(std::string& args) = 0;
+    virtual std::string execute(const std::string& args) = 0;
     virtual ~Command() = default;
 };
 
@@ -333,7 +188,7 @@ public:
     {
         return "帮助";
     }
-    std::string execute(std::string& args) override
+    std::string execute(const std::string& args) override
     {
         // 返回维护的指令列表
         return "指令格式: @我 指令\n当前支持的指令:\n" + cmd_list;
@@ -350,9 +205,15 @@ private:
     std::string getFormattedTime() 
     { 
         time_t now = time(0);
-        tm* ltm = localtime(&now);
+        tm local_time;
+        errno_t err = localtime_s(&local_time, &now);
+        if (err != 0)
+        {
+            Logger::error("获取本地时间失败, 错误码: ", err);
+            return "时间获取失败";
+        }
         char buffer[80];
-        strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", ltm);
+        strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &local_time);
         return std::string(buffer);
     }
 public:
@@ -360,7 +221,7 @@ public:
     {
         return "时间";
     }
-    std::string execute(std::string& args) override
+    std::string execute(const std::string& args) override
     {
         return getFormattedTime();
     }
@@ -373,7 +234,7 @@ public:
 class WeatherCommand : public Command{
 private:
     // 简单提取城市名称
-    std::string getCityName(std::string& args)
+    std::string getCityName(const std::string& args)
     {
         if (args.empty()) 
         {
@@ -410,10 +271,10 @@ private:
         std::string reporttime; // 查询时间
     };
     // 获取天气信息
-    Weatherinfo getWeatherinfo(json& raw_data)
+    Weatherinfo getWeatherinfo(const json& raw_data)
     {
         Weatherinfo result;
-        json& data = raw_data["lives"][0];
+        const json& data = raw_data["lives"][0];
         result.city = data["province"].get<std::string>() + " "
             + data["city"].get<std::string>();
         result.weather = data["weather"].get<std::string>();
@@ -429,26 +290,27 @@ public:
     {
         return "天气";
     }
-    std::string execute(std::string& args) override
+    std::string execute(const std::string& args) override
     {
         std::string city = getCityName(args);
         httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
         auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
         if(!res)
         {
-            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            Logger::error("天气网络请求失败", httplib::to_string(res.error()));
             return "天气网络请求失败";
         }
         if(res->status != 200)
         {
-            std::cerr << "HTTP 状态码: " << res->status << std::endl;
-            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            Logger::warn("天气请求 HTTP状态码: ", res->status);
+            Logger::error("天气请求 异常响应体:", json::parse(res->body).dump(4));
             return "天气请求异常";
         }
         // 先解析返回的JSON
         json raw_data = json::parse(res->body);
         if(raw_data["lives"].empty())
         {
+            Logger::warn("天气查询返回异常", raw_data.dump(4));
             return "天气查询失败, 请输入正确的格式: 天气 城市名称\n暂时只支持国内城市";
         }
         Weatherinfo winfo = getWeatherinfo(raw_data);
@@ -476,7 +338,7 @@ private:
         int tokens;
     };
     // 获取回复信息
-    AIinfo getAIinfo(json& raw_data)
+    AIinfo getAIinfo(const json& raw_data)
     {
         AIinfo result;
         result.model = raw_data["model"].get<std::string>();
@@ -485,7 +347,7 @@ private:
         return result;
     }
     // 与AI交互
-    std::string askAI(std::string& args)
+    std::string askAI(const std::string& args)
     {
         httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
         json body;
@@ -520,19 +382,19 @@ private:
         //   }'
         if(!res)
         {
-            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
             return "AI网络请求失败";
         }
         if(res->status != 200)
         {
-            std::cerr << "HTTP 状态码: " << res->status << std::endl;
-            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            Logger::warn("AI请求 HTTP状态码: ", res->status);
+            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
             return "AI请求异常";
         }
         json raw_data = json::parse(res->body);
         if (!raw_data.contains("choices") || raw_data["choices"].empty())
         {
-            std::cerr << "异常响应体: " << raw_data.dump(4) << std::endl;
+            Logger::warn("AI回复异常", raw_data.dump(4));
             return "AI 回复异常";
         }
         AIinfo ainfo = getAIinfo(raw_data);
@@ -547,7 +409,7 @@ public:
         return "AI对话";
     }
 
-    std::string execute(std::string& args) override
+    std::string execute(const std::string& args) override
     {
         if(args.empty())
         {
@@ -567,7 +429,7 @@ public:
 class BaseTaskManager{
 public:
     virtual bool canHandle(const MessageContext& msgctx) = 0;
-    virtual std::string handleTask(MessageContext& msgctx) = 0;
+    virtual std::string handleTask(const MessageContext& msgctx) = 0;
     virtual ~BaseTaskManager() = default;
 };
 
@@ -617,19 +479,24 @@ public:
     }
 
     // 处理某个文本指令
-    std::string handleTask(MessageContext& msgctx) override
+    std::string handleTask(const MessageContext& msgctx) override
     {
-        // 去除可能的前置空格
-        while(!msgctx.pmsgsegs.text.empty() && msgctx.pmsgsegs.text[0] == ' ')
-        {
-            msgctx.pmsgsegs.text.erase(0, 1);
-        }
         if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
         // 执行指令
         // 先按照空格分割指令名称和参数
         size_t pos = msgctx.pmsgsegs.text.find(' ');
         std::string cmd_name = msgctx.pmsgsegs.text.substr(0, pos);
+        // 去除可能的前置空格
+        while(!cmd_name.empty() && cmd_name[0] == ' ')
+        {
+            cmd_name.erase(0, 1);
+        }
         std::string cmd_args = (pos == std::string::npos) ? "" : msgctx.pmsgsegs.text.substr(pos + 1);
+        // 去除可能的前置空格
+        while(!cmd_args.empty() && cmd_args[0] == ' ')
+        {
+            cmd_args.erase(0, 1);
+        }
         if(cmd_map.count(cmd_name))
         {
             // 调用对应文本指令
@@ -658,7 +525,7 @@ private:
         int like; // 点赞数
     };
     // 获取 bvid
-    std::string getBVid(json& data)
+    std::string getBVid(const json& data)
     {
         std::string qqdocurl = data["meta"]["detail_1"]["qqdocurl"].get<std::string>();
         size_t pos = qqdocurl.find("://");
@@ -672,23 +539,24 @@ private:
         auto res = cli.Head(path); // 这里仅为了获取重定向后的url, 所以用Head
         if(!res)
         {
-            std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
+            Logger::error("B站短链网络请求失败", httplib::to_string(res.error()));
             return "B站视频短链网络请求失败";
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
         size_t bvid_start_pos = real_url.find("BV");
         if(bvid_start_pos == std::string::npos)
         {
+            Logger::error("重定向 url 异常", real_url);
             return "重定向 url 异常";
         }
         std::string bvid = real_url.substr(bvid_start_pos, 12); // bvid长度为12
         return bvid;
     }
     // 获取B站视频信息
-    BVinfo getBVinfo(json& raw_data)
+    BVinfo getBVinfo(const json& raw_data)
     {
         BVinfo bvinfo;
-        json& data = raw_data["data"];
+        const json& data = raw_data["data"];
         bvinfo.bvid = data["bvid"].get<std::string>();
         bvinfo.title = data["title"].get<std::string>();
         bvinfo.up = data["owner"]["name"].get<std::string>();
@@ -702,28 +570,27 @@ private:
         return bvinfo;
     }
     // 处理B站视频
-    std::string handleB23(json& data)
+    std::string handleB23(const json& data)
     {
         std::string bvid = getBVid(data);
         httplib::SSLClient cli(B23_CLIENT_HOST, B23_CLIENT_PORT);
         auto res = cli.Get(B23_GET_PATH + "?bvid=" + bvid);
         if (!res)
         {
-            std::cerr << "bvid: " << bvid << std::endl;
-            std::cerr << "错误响应体: " << res->body << std::endl;
+            Logger::error("B站网络请求失败", httplib::to_string(res.error()));
             return "网络请求失败";
         }
         if(res->status != 200)
         {
-            std::cerr << "HTTP 状态码: " << res->status << std::endl;
-            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            Logger::warn("B站api HTTP状态码: ", res->status);
+            Logger::error("B站api 异常响应体:", json::parse(res->body).dump(4));
             return "获取视频信息失败";
         }
         json raw_bvinfo = json::parse(res->body);
         if(raw_bvinfo["code"].get<int>() != 0 || raw_bvinfo["message"].get<std::string>() != "OK")
         {
-            std::cerr << "bvid: " << bvid << std::endl;
-            return "获取视频信息失败";
+            Logger::error("获取视频信息异常", raw_bvinfo);
+            return "获取视频信息异常";
         }
         BVinfo bvinfo = getBVinfo(raw_bvinfo);
         std::string result;
@@ -745,9 +612,9 @@ public:
         // 当群聊消息类型为 json 时能处理
         return (msgctx.msg_type == "group") && msgctx.pmsgsegs.has_json;
     }
-    std::string handleTask(MessageContext& msgctx) override
+    std::string handleTask(const MessageContext& msgctx) override
     {
-        json& data = msgctx.pmsgsegs.json_data;
+        const json& data = msgctx.pmsgsegs.json_data;
         if(data.contains("meta"))
         {
             if(data["meta"].contains("detail_1"))
@@ -758,6 +625,7 @@ public:
                 }
             }
         }
+        Logger::warn("json 消息内容不符合预期", data);
         return "";
     }
 };
@@ -774,7 +642,7 @@ public:
         tsk_managers.emplace_back(std::move(tsk_manager));
     }
     // 总的任务处理函数
-    std::string handleTask(MessageContext& msgctx)
+    std::string handleTask(const MessageContext& msgctx)
     {
         for(auto& tsk_manager : tsk_managers)
         {
@@ -820,7 +688,7 @@ public:
     {
         // 先解析JSON
         json data = json::parse(req.body);
-        std::cout << data.dump(4) << std::endl;
+        Logger::info("", data.dump(4));
         ////////////////////////////////////////////// 只处理消息事件, 其余事件todo
         if (data["post_type"] != "message")
         {
@@ -833,7 +701,7 @@ public:
         msgctx = msg_manager.getMessageContext(data);
         // 调用任务管理器 得到回复
         std::string reply_msg = tsk_manager.handleTask(msgctx);
-        std::cout << "回复内容: " << reply_msg << std::endl;
+        Logger::info("回复内容: ", reply_msg);
         if (!reply_msg.empty())
         {
             if(msgctx.msg_type == "group") msg_manager.send_group_msg(msgctx.group_id, reply_msg);
@@ -845,7 +713,7 @@ public:
 
 int main()
 {
-    getAllConfigVal();
+    ;
     Manager m;
     // 创建被at时的文本指令管理器
     m.tsk_manager.registerTaskManager(std::make_unique<AtTaskManager>());
