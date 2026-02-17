@@ -230,8 +230,11 @@ public:
         {
             std::cerr << "群聊消息发送失败" << std::endl;
             std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
-        }else{
-            std::cout << "HTTP状态码: " << res->status << std::endl;
+        }
+        if(res->status != 200)
+        {
+            std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
         }
     }
     // 私聊回复函数
@@ -247,8 +250,11 @@ public:
         {
             std::cerr << "私聊消息发送失败" << std::endl;
             std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
-        }else{
-            std::cout << "HTTP状态码: " << res->status << std::endl;
+        }
+        if(res->status != 200)
+        {
+            std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
         }
     }
     // 消息段解析
@@ -395,29 +401,33 @@ public:
         }
         httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
         auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
-        if (res && res->status == 200)
+        if(!res)
         {
-            // 先解析返回的JSON
-            json raw_data = json::parse(res->body);
-            if(raw_data["lives"].empty())
-            {
-                return "天气查询失败, 请输入正确的格式: 天气 城市名称\n暂时只支持国内城市";
-            }
-            auto data = raw_data["lives"][0];
-            std::string result = "城市: " + data["province"].get<std::string>() + " "
-                + data["city"].get<std::string>() + "\n";
-            result += "天气: " + data["weather"].get<std::string>() + "\n";
-            result += "温度: " + data["temperature"].get<std::string>() + "℃\n";
-            result += "风向: " + data["winddirection"].get<std::string>() + "风 "
-                + data["windpower"].get<std::string>() + "级\n";;
-            result += "湿度: " + data["humidity"].get<std::string>() + "%\n";
-            result += "查询时间: " + data["reporttime"].get<std::string>();
-            return result;
-        }else{
             std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
-            return "天气请求失败";
+            return "天气网络请求失败";
         }
-        return "天气请求失败";
+        if(res->status != 200)
+        {
+            std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            return "天气请求异常";
+        }
+        // 先解析返回的JSON
+        json raw_data = json::parse(res->body);
+        if(raw_data["lives"].empty())
+        {
+            return "天气查询失败, 请输入正确的格式: 天气 城市名称\n暂时只支持国内城市";
+        }
+        auto data = raw_data["lives"][0];
+        std::string result = "城市: " + data["province"].get<std::string>() + " "
+            + data["city"].get<std::string>() + "\n";
+        result += "天气: " + data["weather"].get<std::string>() + "\n";
+        result += "温度: " + data["temperature"].get<std::string>() + "℃\n";
+        result += "风向: " + data["winddirection"].get<std::string>() + "风 "
+            + data["windpower"].get<std::string>() + "级\n";;
+        result += "湿度: " + data["humidity"].get<std::string>() + "%\n";
+        result += "查询时间: " + data["reporttime"].get<std::string>();
+        return result;
     }
     ~WeatherCommand() override
     {
@@ -463,60 +473,59 @@ private:
         //   }'
         if(!res)
         {
-            return "网络请求失败";
             std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
-        }else{
-            std::cout << "HTTP状态码: " << res->status << std::endl;
-            if(res->status == 200)
-            {
-                json result = json::parse(res->body);
-                // 硅基流动api reponse 结构示例
-                // {
-                //     "id": "019bdaa55225ef854b320e9b838f77ce",
-                //     "object": "chat.completion",
-                //     "created": 1768899826,
-                //     "model": "Pro/zai-org/GLM-4.7",
-                //     "choices": [
-                //         {
-                //         "index": 0,
-                //         "message": {
-                //             "role": "assistant",
-                //             "content": "你好！...",
-                //             "reasoning_content": "..."
-                //         },
-                //         "finish_reason": "stop"
-                //         }
-                //     ],
-                //     "usage": {
-                //         "prompt_tokens": 15,
-                //         "completion_tokens": 1540,
-                //         "total_tokens": 1555,
-                //         "completion_tokens_details": {
-                //         "reasoning_tokens": 1190
-                //         },
-                //         "prompt_tokens_details": {
-                //         "cached_tokens": 0
-                //         },
-                //         "prompt_cache_hit_tokens": 0,
-                //         "prompt_cache_miss_tokens": 15
-                //     },
-                //     "system_fingerprint": ""
-                // }
-                if (result.contains("choices") && !result["choices"].empty())
-                {
-                    auto& choices = result["choices"][0];
-                    auto& usage = result["usage"];
-                    std::string ai_reply = choices["message"]["content"].get<std::string>();
-                    std::string total_tokens = std::to_string(usage["total_tokens"].get<int>());
-                    std::string reply = "模型: " + result["model"].get<std::string>() 
-                        + "\nAI回复内容: " + ai_reply + "\n使用 token: " + total_tokens;
-                    return reply;
-                }
-                return "AI 回复异常";
-            }
-            std::cerr << json::parse(res->body).dump() << std::endl;
-            return "AI 请求异常";
+            return "AI网络请求失败";
         }
+        if(res->status != 200)
+        {
+            std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
+            return "AI请求异常";
+        }
+        json result = json::parse(res->body);
+        // 硅基流动api reponse 结构示例
+        // {
+        //     "id": "019bdaa55225ef854b320e9b838f77ce",
+        //     "object": "chat.completion",
+        //     "created": 1768899826,
+        //     "model": "Pro/zai-org/GLM-4.7",
+        //     "choices": [
+        //         {
+        //         "index": 0,
+        //         "message": {
+        //             "role": "assistant",
+        //             "content": "你好！...",
+        //             "reasoning_content": "..."
+        //         },
+        //         "finish_reason": "stop"
+        //         }
+        //     ],
+        //     "usage": {
+        //         "prompt_tokens": 15,
+        //         "completion_tokens": 1540,
+        //         "total_tokens": 1555,
+        //         "completion_tokens_details": {
+        //         "reasoning_tokens": 1190
+        //         },
+        //         "prompt_tokens_details": {
+        //         "cached_tokens": 0
+        //         },
+        //         "prompt_cache_hit_tokens": 0,
+        //         "prompt_cache_miss_tokens": 15
+        //     },
+        //     "system_fingerprint": ""
+        // }
+        if (result.contains("choices") && !result["choices"].empty())
+        {
+            auto& choices = result["choices"][0];
+            auto& usage = result["usage"];
+            std::string ai_reply = choices["message"]["content"].get<std::string>();
+            std::string total_tokens = std::to_string(usage["total_tokens"].get<int>());
+            std::string reply = "模型: " + result["model"].get<std::string>() 
+                + "\nAI回复内容: " + ai_reply + "\n使用 token: " + total_tokens;
+            return reply;
+        }
+        return "AI 回复异常";
     }
 public:
     std::string name() override
@@ -650,7 +659,7 @@ private:
         if(!res)
         {
             std::cerr << "error: " << httplib::to_string(res.error()) << std::endl;
-            return "B站视频短链请求失败";
+            return "B站视频短链网络请求失败";
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
         size_t bvid_start_pos = real_url.find("BV");
@@ -703,15 +712,10 @@ private:
         if(res->status != 200)
         {
             std::cerr << "HTTP 状态码: " << res->status << std::endl;
+            std::cerr << "异常响应体: " << json::parse(res->body).dump(4) << std::endl;
             return "获取视频信息失败";
         }
         json raw_bvinfo = json::parse(res->body);
-        if(raw_bvinfo["code"].get<int>() != 0 && raw_bvinfo["message"].get<std::string>() != "OK")
-        {
-            std::cerr << "bvid: " << bvid << std::endl;
-            std::cerr << "错误响应体: " << res->body << std::endl;
-            return "获取视频信息失败";
-        }
         BVinfo bvinfo = getBVinfo(raw_bvinfo);
         std::string result;
         result = "视频标题: " + bvinfo.title;
@@ -763,7 +767,6 @@ public:
     // 总的任务处理函数
     std::string handleTask(MessageContext& msgctx)
     {
-        std::cout << "开始处理任务: " << msgctx.msg_segments.dump() << std::endl;
         for(auto& tsk_manager : tsk_managers)
         {
             if(tsk_manager->canHandle(msgctx))
