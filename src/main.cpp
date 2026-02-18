@@ -441,6 +441,11 @@ class AtTaskManager : public BaseTaskManager{
 private: 
     // 维护一个指令表，用于存储多种可支持的指令
     std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
+    // 注册一个用指令接口实现的指令
+    void registerCommand(std::unique_ptr<Command> cmd)
+    { 
+        cmd_map[cmd->name()] = std::move(cmd);
+    }
 
 public:
     // 用于获取指令列表
@@ -454,11 +459,6 @@ public:
         // 去除最后一个回车符
         cmd_list.pop_back();
         return cmd_list;
-    }
-    // 注册一个用指令接口实现的指令
-    void registerCommand(std::unique_ptr<Command> cmd)
-    { 
-        cmd_map[cmd->name()] = std::move(cmd);
     }
 
     AtTaskManager()
@@ -636,10 +636,17 @@ public:
 class TaskManager{
 private:
     std::vector<std::unique_ptr<BaseTaskManager>> tsk_managers;
-public:
     void registerTaskManager(std::unique_ptr<BaseTaskManager> tsk_manager)
     {
         tsk_managers.emplace_back(std::move(tsk_manager));
+    }
+
+public:
+    TaskManager()
+    {
+        // 注册特定任务管理器
+        registerTaskManager(std::make_unique<AtTaskManager>());
+        registerTaskManager(std::make_unique<JsonTaskManager>());
     }
     // 总的任务处理函数
     std::string handleTask(const MessageContext& msgctx)
@@ -713,13 +720,7 @@ public:
 
 int main()
 {
-    ;
     Manager m;
-    // 创建被at时的文本指令管理器
-    m.tsk_manager.registerTaskManager(std::make_unique<AtTaskManager>());
-    // 创建分享的json任务管理器
-    m.tsk_manager.registerTaskManager(std::make_unique<JsonTaskManager>());
-    // ...其他任务类型管理器 todo
     m.start();
     return 0;
 }
