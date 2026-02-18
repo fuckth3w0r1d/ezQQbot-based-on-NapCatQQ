@@ -54,6 +54,7 @@ struct ParsedMsgSegments{
     bool has_json = false;
 
     std::string text;        // 文本
+    std::string image;       // image url
     json json_data;          // json
 };
 struct MessageContext{
@@ -68,48 +69,9 @@ struct MessageContext{
 // 消息管理器
 ///////////
 class MessageManager{
-public:
-    // 群聊回复函数
-    void send_group_msg(size_t group_id, const std::string& message)
-    { 
-        httplib::Client cli(SERVER_HOST, SERVER_PORT);
-        json body;
-        body["group_id"] = group_id;
-        body["message"] = message;
-        // 注意加上 token 否则会 403 导致不能回复
-        httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-        auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
-        if (!res)
-        {
-            Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
-        }
-        if(res->status != 200)
-        {
-            Logger::warn("send_group_msg HTTP状态码: ", res->status);
-            Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
-        }
-    }
-    // 私聊回复函数
-    void send_private_msg(size_t user_id, const std::string& message)
-    {
-        httplib::Client cli(SERVER_HOST, SERVER_PORT);
-        json body;
-        body["user_id"] = user_id;
-        body["message"] = message;
-        httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-        auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
-        if (!res)
-        {
-            Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
-        }
-        if(res->status != 200)
-        {
-            Logger::warn("send_private_msg HTTP状态码: ", res->status);
-            Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
-        }
-    }
+private:
     // 消息段解析
-    ParsedMsgSegments parseMsgSegments(const json& msgsegs)
+    static ParsedMsgSegments parseMsgSegments(const json& msgsegs)
     {
         ParsedMsgSegments result;
         for(auto& seg : msgsegs)
@@ -148,8 +110,51 @@ public:
         }
         return result;
     }
+public:
+    // 统一发送消息接口
+    static void send_msg(const MessageContext& recv, const json& reply)
+    {
+        httplib::Client cli(SERVER_HOST, SERVER_PORT);
+        json body;
+        // 群聊消息
+        if(recv.msg_type == "group")
+        {
+            body["group_id"] = recv.group_id;
+            body["message"] = reply;
+            // 注意加上 token 否则会 403 导致不能回复
+            httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
+            auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
+            if (!res)
+            {
+                Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
+            }
+            if(res->status != 200)
+            {
+                Logger::warn("send_group_msg HTTP状态码: ", res->status);
+                Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
+            }
+        }
+        // 私聊消息
+        if(recv.msg_type == "private")
+        {
+            body["user_id"] = recv.user_id;
+            body["message"] = reply;
+            // 注意加上 token 否则会 403 导致不能回复
+            httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
+            auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
+            if (!res)
+            {
+                Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
+            }
+            if(res->status != 200)
+            {
+                Logger::warn("send_private_msg HTTP状态码: ", res->status);
+                Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
+            }
+        }
+    }
     // 获取消息结构
-    MessageContext getMessageContext(const json& data)
+    static MessageContext getMessageContext(const json& data)
     {
         MessageContext msgctx;
         msgctx.msg_type = data["message_type"];
@@ -158,6 +163,26 @@ public:
         msgctx.msg_segments = data["message"];
         msgctx.pmsgsegs = parseMsgSegments(msgctx.msg_segments);
         return msgctx;
+    }
+    // 构造array格式消息
+    static json buildMsg(const std::string& msg_type, const std::string& msg_data)
+    {
+        json result;
+        if(msg_type == "at")
+        {
+            json data;
+            data["qq"] = msg_data;
+            result["data"] = data;
+            result["type"] = msg_type;
+        }
+        if(msg_type == "text")
+        {
+            json data;
+            data["text"] = msg_data;
+            result["data"] = data;
+            result["type"] = msg_type;
+        }
+        return result;
     }
 };
 
@@ -429,7 +454,7 @@ public:
 class BaseTaskManager{
 public:
     virtual bool canHandle(const MessageContext& msgctx) = 0;
-    virtual std::string handleTask(const MessageContext& msgctx) = 0;
+    virtual json handleTask(const MessageContext& msgctx) = 0;
     virtual ~BaseTaskManager() = default;
 };
 
@@ -478,8 +503,8 @@ public:
         return msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group");
     }
 
-    // 处理某个文本指令
-    std::string handleTask(const MessageContext& msgctx) override
+    // 处理某个被at的文本指令
+    json handleTask(const MessageContext& msgctx) override
     {
         if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
         // 执行指令
@@ -497,12 +522,18 @@ public:
         {
             cmd_args.erase(0, 1);
         }
+        json result = json::array();
         if(cmd_map.count(cmd_name))
         {
             // 调用对应文本指令
-            return cmd_map[cmd_name]->execute(cmd_args);
+            std::string reply_text = cmd_map[cmd_name]->execute(cmd_args);
+            result.push_back(MessageManager::buildMsg("at", std::to_string(msgctx.user_id)));
+            result.push_back(MessageManager::buildMsg("text", "\n"));
+            result.push_back(MessageManager::buildMsg("text", reply_text));
+            return result;
         }
-        return "未知指令: " + cmd_name;
+        result.push_back(MessageManager::buildMsg("text", "未知指令: " + cmd_name));
+        return result;
     }
 };
 
@@ -612,7 +643,7 @@ public:
         // 当群聊消息类型为 json 时能处理
         return (msgctx.msg_type == "group") && msgctx.pmsgsegs.has_json;
     }
-    std::string handleTask(const MessageContext& msgctx) override
+    json handleTask(const MessageContext& msgctx) override
     {
         const json& data = msgctx.pmsgsegs.json_data;
         if(data.contains("meta"))
@@ -621,12 +652,15 @@ public:
             {
                 if(data["meta"]["detail_1"]["appid"].get<std::string>() == B23_APP_ID)
                 { // 暂时只处理B站分享视频
-                    return handleB23(data);
+                    std::string reply_text =  handleB23(data);
+                    json result = json::array();
+                    result.push_back(MessageManager::buildMsg("text", reply_text));
+                    return result;
                 }
             }
         }
         Logger::warn("json 消息内容不符合预期", data);
-        return "";
+        return {};
     }
 };
 
@@ -649,7 +683,7 @@ public:
         registerTaskManager(std::make_unique<JsonTaskManager>());
     }
     // 总的任务处理函数
-    std::string handleTask(const MessageContext& msgctx)
+    json handleTask(const MessageContext& msgctx)
     {
         for(auto& tsk_manager : tsk_managers)
         {
@@ -659,7 +693,7 @@ public:
                 return tsk_manager->handleTask(msgctx);
             }
         }
-        return "";
+        return {};
     }
 };
 
@@ -674,8 +708,7 @@ private:
 public:
     // 创建任务管理器
     TaskManager tsk_manager;
-    // 创建消息管理器
-    MessageManager msg_manager;
+
     Manager()
     {
         // 注册 POST 路由
@@ -703,16 +736,15 @@ public:
             return;
         }
 
-        // 调用消息管理器 构造 MessageContext
+        // 构造 MessageContext
         MessageContext msgctx;
-        msgctx = msg_manager.getMessageContext(data);
+        msgctx = MessageManager::getMessageContext(data);
         // 调用任务管理器 得到回复
-        std::string reply_msg = tsk_manager.handleTask(msgctx);
-        Logger::info("回复内容: ", reply_msg);
-        if (!reply_msg.empty())
+        json reply = tsk_manager.handleTask(msgctx);
+        Logger::info("回复内容: ", reply);
+        if (!reply.empty())
         {
-            if(msgctx.msg_type == "group") msg_manager.send_group_msg(msgctx.group_id, reply_msg);
-            if(msgctx.msg_type == "private") msg_manager.send_private_msg(msgctx.user_id, reply_msg);
+            MessageManager::send_msg(msgctx, reply);
         }
         res.set_content("{}", "text/plain");
     }
