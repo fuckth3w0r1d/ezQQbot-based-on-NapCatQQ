@@ -1,4 +1,5 @@
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include "json.hpp"
 
@@ -127,8 +128,23 @@ public:
         return data["b23"]["port"].get<const int>();
     }
 
-    const std::string getB23GetPath()
+    const std::string getB23GetQueryPath()
     {
-        return data["b23"]["path"].get<const std::string>();
+        return data["b23"]["query_path"].get<const std::string>();
+    }
+
+    const std::string getB23GetPlayPath()
+    {
+        return data["b23"]["play_path"].get<const std::string>();
+    }
+
+    const size_t getDownloadSizeLimit()
+    {
+        return data["cache"]["download_size_limit"].get<const size_t>();
+    }
+
+    const std::filesystem::path getCachePath()
+    {
+        return std::filesystem::path(data["cache"]["cache_path"].get<std::string>());
     }
 };

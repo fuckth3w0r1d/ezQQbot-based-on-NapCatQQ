@@ -4,7 +4,10 @@
 #include <memory>        
 #include <unordered_map> 
 #include <ctime>         
-#include <cstddef>  
+#include <cstddef>
+#include <regex>
+#include <filesystem>
+#include <fstream>  
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
@@ -44,7 +47,11 @@ const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
 const std::string B23_APP_ID = cfg.getB23Appid();
 const std::string B23_CLIENT_HOST = cfg.getB23Host();
 const int B23_CLIENT_PORT = cfg.getB23Port();
-const std::string B23_GET_PATH = cfg.getB23GetPath();
+const std::string B23_QUERY_PATH = cfg.getB23GetQueryPath();
+const std::string B23_PLAY_PATH = cfg.getB23GetPlayPath();
+// 本地缓存
+const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
+const std::filesystem::path CACHE_PATH = cfg.getCachePath();
 
 // 消息结构
 struct ParsedMsgSegments{
@@ -58,8 +65,8 @@ struct ParsedMsgSegments{
     json json_data;          // json
 };
 struct MessageContext{
-    size_t group_id;
-    size_t user_id;
+    std::string group_id;
+    std::string user_id;
     std::string msg_type;
     json msg_segments;
     ParsedMsgSegments pmsgsegs;
@@ -116,40 +123,43 @@ public:
     {
         httplib::Client cli(SERVER_HOST, SERVER_PORT);
         json body;
-        // 群聊消息
-        if(recv.msg_type == "group")
+        for(auto& seg : reply)
         {
-            body["group_id"] = recv.group_id;
-            body["message"] = reply;
-            // 注意加上 token 否则会 403 导致不能回复
-            httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-            auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
-            if (!res)
+            // 群聊消息
+            if(recv.msg_type == "group")
             {
-                Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
+                body["group_id"] = recv.group_id;
+                body["message"] = seg;
+                // 注意加上 token 否则会 403 导致不能回复
+                httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
+                auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
+                if (!res)
+                {
+                    Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
+                }
+                if(res->status != 200)
+                {
+                    Logger::warn("send_group_msg HTTP状态码: ", res->status);
+                    Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
+                }
             }
-            if(res->status != 200)
+            // 私聊消息
+            if(recv.msg_type == "private")
             {
-                Logger::warn("send_group_msg HTTP状态码: ", res->status);
-                Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
-            }
-        }
-        // 私聊消息
-        if(recv.msg_type == "private")
-        {
-            body["user_id"] = recv.user_id;
-            body["message"] = reply;
-            // 注意加上 token 否则会 403 导致不能回复
-            httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-            auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
-            if (!res)
-            {
-                Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
-            }
-            if(res->status != 200)
-            {
-                Logger::warn("send_private_msg HTTP状态码: ", res->status);
-                Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
+                body["user_id"] = recv.user_id;
+                body["message"] = seg;
+                // 注意加上 token 否则会 403 导致不能回复
+                httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
+                auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
+                if (!res)
+                {
+                    Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
+                }
+                if(res->status != 200)
+                {
+                    Logger::warn("send_private_msg HTTP状态码: ", res->status);
+                    Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
+                }
             }
         }
     }
@@ -157,10 +167,10 @@ public:
     static MessageContext getMessageContext(const json& data)
     {
         MessageContext msgctx;
-        msgctx.msg_type = data["message_type"];
-        if (msgctx.msg_type == "group") msgctx.group_id = data["group_id"]; // 私聊没有 group_id
-        msgctx.user_id = data["user_id"];
-        msgctx.msg_segments = data["message"];
+        msgctx.msg_type = data["message_type"].get<std::string>();
+        if (msgctx.msg_type == "group") msgctx.group_id = std::to_string(data["group_id"].get<size_t>());
+        msgctx.user_id = std::to_string(data["user_id"].get<size_t>());
+        msgctx.msg_segments = data["message"].get<json>();
         msgctx.pmsgsegs = parseMsgSegments(msgctx.msg_segments);
         return msgctx;
     }
@@ -179,6 +189,13 @@ public:
         {
             json data;
             data["text"] = msg_data;
+            result["data"] = data;
+            result["type"] = msg_type;
+        }
+        if(msg_type == "image" || msg_type == "video")
+        {
+            json data;
+            data["file"] = msg_data;
             result["data"] = data;
             result["type"] = msg_type;
         }
@@ -527,8 +544,7 @@ public:
         {
             // 调用对应文本指令
             std::string reply_text = cmd_map[cmd_name]->execute(cmd_args);
-            result.push_back(MessageManager::buildMsg("at", std::to_string(msgctx.user_id)));
-            result.push_back(MessageManager::buildMsg("text", "\n"));
+            result.push_back(MessageManager::buildMsg("at", msgctx.user_id));
             result.push_back(MessageManager::buildMsg("text", reply_text));
             return result;
         }
@@ -546,8 +562,11 @@ private:
     struct BVinfo{
         std::string title;
         std::string bvid;
+        std::string cid; // 获取视频需要的请求参数
         std::string up; // up主昵称
         std::string face; // 头像url
+        std::string url; // 视频URL
+        size_t size; // 视频大小
         int view; // 观看次数
         int reply; // 评论数
         int favorite; // 收藏数
@@ -574,20 +593,20 @@ private:
             return "B站视频短链网络请求失败";
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
-        size_t bvid_start_pos = real_url.find("BV");
-        if(bvid_start_pos == std::string::npos)
-        {
-            Logger::error("重定向 url 异常", real_url);
-            return "重定向 url 异常";
-        }
-        std::string bvid = real_url.substr(bvid_start_pos, 12); // bvid长度为12
-        return bvid;
+        // 正则匹配获取bvid
+        std::regex bv_pattern(R"(BV[A-Za-z0-9]{10})"); 
+        std::smatch match;
+        if (std::regex_search(real_url, match, bv_pattern))
+            return match[0];  // 返回匹配到的BV号
+        Logger::error("未找到BV号", real_url);
+        return "";
     }
     // 获取B站视频信息
     BVinfo getBVinfo(const json& raw_data)
     {
         BVinfo bvinfo;
         const json& data = raw_data["data"];
+        bvinfo.cid = std::to_string(data["cid"].get<size_t>());
         bvinfo.bvid = data["bvid"].get<std::string>();
         bvinfo.title = data["title"].get<std::string>();
         bvinfo.up = data["owner"]["name"].get<std::string>();
@@ -598,36 +617,135 @@ private:
         bvinfo.coin = data["stat"]["coin"].get<int>();
         bvinfo.share = data["stat"]["share"].get<int>();
         bvinfo.like = data["stat"]["like"].get<int>();
+        getBVUrlandSize(bvinfo.bvid, bvinfo.cid, bvinfo);
         return bvinfo;
     }
-    // 处理B站视频
-    std::string handleB23(const json& data)
+    // 获取B站视频直链url和视频大小
+    void getBVUrlandSize(const std::string& bvid, const std::string& cid, BVinfo& bvinfo)
     {
-        std::string bvid = getBVid(data);
         httplib::SSLClient cli(B23_CLIENT_HOST, B23_CLIENT_PORT);
-        auto res = cli.Get(B23_GET_PATH + "?bvid=" + bvid);
+        auto res = cli.Get(B23_PLAY_PATH + "?bvid=" + bvid + "&cid=" + cid);
         if (!res)
         {
-            Logger::error("B站网络请求失败", httplib::to_string(res.error()));
-            return "网络请求失败";
+            Logger::error("B站播放请求失败", httplib::to_string(res.error()));
+            return;
         }
         if(res->status != 200)
         {
-            Logger::warn("B站api HTTP状态码: ", res->status);
-            Logger::error("B站api 异常响应体:", json::parse(res->body).dump(4));
-            return "获取视频信息失败";
+            Logger::warn("B站播放api HTTP状态码: ", res->status);
+            Logger::error("B站播放api 异常响应体:", json::parse(res->body).dump(4));
+            return;
+        }
+        json data = json::parse(res->body);
+        if(data["code"].get<int>() != 0 || data["message"].get<std::string>() != "OK" || data["data"]["durl"].empty())
+        {
+            Logger::error("获取视频播放信息异常", data);
+            return;
+        }
+        bvinfo.url = data["data"]["durl"][0]["url"].get<std::string>();
+        Logger::info("获取视频链接: ", bvinfo.url);
+        bvinfo.size = data["data"]["durl"][0]["size"].get<size_t>();
+        Logger::info("获取视频大小: ", bvinfo.size);
+    }   
+    // 下载视频
+    std::string downloadBV(const BVinfo& bvinfo)
+    {
+        // 使用正则表达式解析url
+        std::regex re(R"(https://([^/]+)(/.*))");
+        std::smatch match;
+        if(!std::regex_match(bvinfo.url, match, re))
+        {
+            Logger::error("URL 解析失败", bvinfo.url);
+            return "";
+        }
+        std::string host = match[1];
+        std::string path = match[2];
+        // 创建 cache 目录
+        std::filesystem::path cache_dir = CACHE_PATH;
+        if(!std::filesystem::exists(cache_dir))
+        {
+            std::filesystem::create_directories(cache_dir);
+            Logger::info("cache目录不存在, 已创建: ", cache_dir.generic_string());
+        }else{
+            Logger::info("cache目录已存在: ", cache_dir.generic_string());
+        }
+        // 使用bvid作文件名
+        std::string filename = bvinfo.bvid + ".mp4";
+        std::filesystem::path save_path = cache_dir / filename;
+        if(std::filesystem::exists(save_path))
+        {
+            Logger::info("cache目录中存在视频", bvinfo.bvid);
+            return save_path.generic_string();
+        }
+        // 建立SSL客户端
+        httplib::SSLClient cli(host);
+        cli.set_follow_location(true);
+        cli.enable_server_certificate_verification(false); // 下载B站视频, 关闭证书
+        cli.set_read_timeout(60);   // 防止卡死
+        cli.set_write_timeout(60);
+        httplib::Headers headers = {
+            {"Referer", "https://www.bilibili.com"},
+            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        };
+        std::ofstream ofs(save_path, std::ios::binary);
+        if (!ofs.is_open())
+        {
+            Logger::error("文件创建失败: ", save_path.generic_string());
+            return "";
+        }
+        // 流式下载
+        auto res = cli.Get(path, headers, [&](const char* data, size_t data_length){
+                ofs.write(data, data_length); 
+                return true;  // 返回 false 可中断下载
+            });
+        ofs.close();
+        if (!res)
+        {
+            Logger::error("B站视频下载失败", httplib::to_string(res.error()));
+            std::filesystem::remove(save_path);
+            return "";
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("B站视频下载异常 HTTP状态码: ", res->status);
+            std::filesystem::remove(save_path);
+            return "";
+        }
+        // 返回路径
+        Logger::info("视频已下载到: ", save_path.generic_string());
+        return save_path.generic_string(); // generic_string方法, 使用 / 
+    }
+
+    // 处理B站视频
+    std::pair<std::string, std::string> handleBV(const json& data)
+    {
+        std::string bvid = getBVid(data);
+        Logger::info("Bvid: ", bvid);
+        httplib::SSLClient cli(B23_CLIENT_HOST, B23_CLIENT_PORT);
+        auto res = cli.Get(B23_QUERY_PATH + "?bvid=" + bvid);
+        if (!res)
+        {
+            Logger::error("B站查询请求失败", httplib::to_string(res.error()));
+            return std::make_pair("网络请求失败", "");
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("B站查询api HTTP状态码: ", res->status);
+            Logger::error("B站查询api 异常响应体:", json::parse(res->body).dump(4));
+            return std::make_pair("获取视频信息失败", "");
         }
         json raw_bvinfo = json::parse(res->body);
         if(raw_bvinfo["code"].get<int>() != 0 || raw_bvinfo["message"].get<std::string>() != "OK")
         {
             Logger::error("获取视频信息异常", raw_bvinfo);
-            return "获取视频信息异常";
+            return std::make_pair("获取视频信息异常", "");
         }
+        // 解析并处理B站视频信息
         BVinfo bvinfo = getBVinfo(raw_bvinfo);
         std::string result;
         result = "视频标题: " + bvinfo.title;
         result += "\nup主: " + bvinfo.up;
-        result += "\n头像: " + bvinfo.face;
+        result += "\nup主头像: " + bvinfo.face;
         result += "\nbvid: " + bvinfo.bvid;
         result += "\n观看次数: " + std::to_string(bvinfo.view);
         result += "\n评论数: " + std::to_string(bvinfo.reply);
@@ -635,7 +753,9 @@ private:
         result += "\n投币数: " + std::to_string(bvinfo.coin);
         result += "\n分享数: " + std::to_string(bvinfo.share);
         result += "\n点赞数: " + std::to_string(bvinfo.like);
-        return result;
+        // 下载B站视频
+        std::string video_path = downloadBV(bvinfo);
+        return std::make_pair(result, video_path);
     }
 public:
     bool canHandle(const MessageContext& msgctx) override
@@ -652,9 +772,15 @@ public:
             {
                 if(data["meta"]["detail_1"]["appid"].get<std::string>() == B23_APP_ID)
                 { // 暂时只处理B站分享视频
-                    std::string reply_text =  handleB23(data);
+                    auto [reply_text, video_path] = handleBV(data);
                     json result = json::array();
                     result.push_back(MessageManager::buildMsg("text", reply_text));
+                    if(!video_path.empty())
+                    {
+                        result.push_back(MessageManager::buildMsg("video", "file:///" + video_path));
+                    }else{
+                        result.push_back(MessageManager::buildMsg("text", "\n视频太大了, bot的主人拒绝下载"));
+                    }
                     return result;
                 }
             }
@@ -728,7 +854,6 @@ public:
     {
         // 先解析JSON
         json data = json::parse(req.body);
-        Logger::info("", data.dump(4));
         ////////////////////////////////////////////// 只处理消息事件, 其余事件todo
         if (data["post_type"] != "message")
         {
@@ -739,6 +864,7 @@ public:
         // 构造 MessageContext
         MessageContext msgctx;
         msgctx = MessageManager::getMessageContext(data);
+        Logger::info("获取消息结构成功", msgctx.msg_segments);
         // 调用任务管理器 得到回复
         json reply = tsk_manager.handleTask(msgctx);
         Logger::info("回复内容: ", reply);
@@ -752,7 +878,9 @@ public:
 
 int main()
 {
+    Logger::info(" === 创建管理器", " === ");
     Manager m;
+    Logger::info(" === 开始监听", " === ");
     m.start();
     return 0;
 }
