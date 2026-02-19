@@ -122,12 +122,12 @@ public:
     static void send_msg(const MessageContext& recv, const json& reply)
     {
         httplib::Client cli(SERVER_HOST, SERVER_PORT);
-        json body;
-        for(auto& seg : reply)
+        // 群聊消息
+        if(recv.msg_type == "group")
         {
-            // 群聊消息
-            if(recv.msg_type == "group")
+            for(auto& seg : reply)
             {
+                json body;
                 body["group_id"] = recv.group_id;
                 body["message"] = seg;
                 // 注意加上 token 否则会 403 导致不能回复
@@ -143,9 +143,13 @@ public:
                     Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
                 }
             }
-            // 私聊消息
-            if(recv.msg_type == "private")
+        }
+        // 私聊消息
+        if(recv.msg_type == "private")
+        {
+            for(auto& seg : reply)
             {
+                json body;
                 body["user_id"] = recv.user_id;
                 body["message"] = seg;
                 // 注意加上 token 否则会 403 导致不能回复
