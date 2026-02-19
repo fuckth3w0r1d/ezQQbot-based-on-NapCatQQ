@@ -3,7 +3,7 @@
 #include <iostream>
 #include "json.hpp"
 
-using json = nlohmann::json;
+using json = nlohmann::json; 
 
 ////////////////////
 // 用于获取 config 信息
@@ -15,7 +15,7 @@ private:
 public:
     Config()
     {
-        std::ifstream file("config.json");
+        std::ifstream file("config.json"); // config.json在项目根目录, 编译出的bot.exe也在项目根目录
         if (!file.is_open()) 
         {
             std::cerr << "无法打开文件" << std::endl;
@@ -140,11 +140,16 @@ public:
 
     const size_t getDownloadSizeLimit()
     {
-        return data["cache"]["download_size_limit"].get<const size_t>();
+        return data["file"]["download_size_limit"].get<const size_t>();
     }
 
     const std::filesystem::path getCachePath()
     {
-        return std::filesystem::path(data["cache"]["cache_path"].get<std::string>());
+        return std::filesystem::path(data["file"]["cache_path"].get<std::string>());
+    }
+
+    const size_t getDownloadBufferSize()
+    {
+        return data["file"]["download_buffer_size"].get<const size_t>();
     }
 };

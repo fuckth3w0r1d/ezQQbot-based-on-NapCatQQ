@@ -33,8 +33,9 @@
         "port": 443,
         "path": "/x/web-interface/view"
     },
-    "cache": {
+    "file": {
         "download_size_limit": 300000000,
-        "cache_path": "path/to/cache"
+        "cache_path": "path/to/cache",
+        "buffer_size": 6400
     }
 }

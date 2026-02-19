@@ -52,6 +52,7 @@ const std::string B23_PLAY_PATH = cfg.getB23GetPlayPath();
 // 本地缓存
 const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
 const std::filesystem::path CACHE_PATH = cfg.getCachePath();
+const size_t DOWNLOAD_BUFFER_SIZE = cfg.getDownloadBufferSize();
 
 // 消息结构
 struct ParsedMsgSegments{
@@ -548,11 +549,11 @@ public:
         {
             // 调用对应文本指令
             std::string reply_text = cmd_map[cmd_name]->execute(cmd_args);
-            result.push_back(MessageManager::buildMsg("at", msgctx.user_id));
-            result.push_back(MessageManager::buildMsg("text", reply_text));
+            result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
+            result.emplace_back(MessageManager::buildMsg("text", reply_text));
             return result;
         }
-        result.push_back(MessageManager::buildMsg("text", "未知指令: " + cmd_name));
+        result.emplace_back(MessageManager::buildMsg("text", "未知指令: " + cmd_name));
         return result;
     }
 };
@@ -582,13 +583,17 @@ private:
     std::string getBVid(const json& data)
     {
         std::string qqdocurl = data["meta"]["detail_1"]["qqdocurl"].get<std::string>();
-        size_t pos = qqdocurl.find("://");
-        // 字符串处理, 先去除https://头
-        std::string no_proto = (pos != std::string::npos) ? qqdocurl.substr(pos + 3) : qqdocurl;
-        pos = no_proto.find("/");
+        // 使用正则表达式解析url
+        static std::regex url_pattern(R"(https://([^/]+)(/.*))");
+        std::smatch url_match;
+        if(!std::regex_match(qqdocurl, url_match, url_pattern))
+        {
+            Logger::error("URL 解析失败", qqdocurl);
+            return "";
+        }
         // 找到qq分享的b站视频链接的 host 和 path
-        std::string host = no_proto.substr(0, pos);
-        std::string path = no_proto.substr(pos);
+        std::string host = url_match[1];
+        std::string path = url_match[2];
         httplib::SSLClient cli(host, 443); // 默认443端口
         auto res = cli.Head(path); // 这里仅为了获取重定向后的url, 所以用Head
         if(!res)
@@ -598,10 +603,10 @@ private:
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
         // 正则匹配获取bvid
-        std::regex bv_pattern(R"(BV[A-Za-z0-9]{10})"); 
-        std::smatch match;
-        if (std::regex_search(real_url, match, bv_pattern))
-            return match[0];  // 返回匹配到的BV号
+        static std::regex bv_pattern(R"(BV[A-Za-z0-9]{10})");
+        std::smatch bv_match; 
+        if (std::regex_search(real_url, bv_match, bv_pattern))
+            return bv_match[0];  // 返回匹配到的BV号
         Logger::error("未找到BV号", real_url);
         return "";
     }
@@ -655,9 +660,9 @@ private:
     std::string downloadBV(const BVinfo& bvinfo)
     {
         // 使用正则表达式解析url
-        std::regex re(R"(https://([^/]+)(/.*))");
+        static std::regex url_pattern(R"(https://([^/]+)(/.*))");
         std::smatch match;
-        if(!std::regex_match(bvinfo.url, match, re))
+        if(!std::regex_match(bvinfo.url, match, url_pattern))
         {
             Logger::error("URL 解析失败", bvinfo.url);
             return "";
@@ -691,12 +696,16 @@ private:
             {"Referer", "https://www.bilibili.com"},
             {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         };
+        // 创建文件
         std::ofstream ofs(save_path, std::ios::binary);
         if (!ofs.is_open())
         {
             Logger::error("文件创建失败: ", save_path.generic_string());
             return "";
         }
+        // 设置下载缓冲区
+        std::unique_ptr<char[]> buffer(new char[DOWNLOAD_BUFFER_SIZE]);
+        ofs.rdbuf()->pubsetbuf(buffer.get(), DOWNLOAD_BUFFER_SIZE);
         // 流式下载
         auto res = cli.Get(path, headers, [&](const char* data, size_t data_length){
                 ofs.write(data, data_length); 
@@ -778,12 +787,12 @@ public:
                 { // 暂时只处理B站分享视频
                     auto [reply_text, video_path] = handleBV(data);
                     json result = json::array();
-                    result.push_back(MessageManager::buildMsg("text", reply_text));
+                    result.emplace_back(MessageManager::buildMsg("text", reply_text));
                     if(!video_path.empty())
                     {
-                        result.push_back(MessageManager::buildMsg("video", "file:///" + video_path));
+                        result.emplace_back(MessageManager::buildMsg("video", "file:///" + video_path));
                     }else{
-                        result.push_back(MessageManager::buildMsg("text", "\n视频太大了, bot的主人拒绝下载"));
+                        result.emplace_back(MessageManager::buildMsg("text", "\n视频太大了, bot的主人拒绝下载"));
                     }
                     return result;
                 }
