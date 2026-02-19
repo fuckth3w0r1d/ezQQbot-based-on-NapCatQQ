@@ -32,5 +32,9 @@
         "host": "api.bilibili.com",
         "port": 443,
         "path": "/x/web-interface/view"
+    },
+    "cache": {
+        "download_size_limit": 300000000,
+        "cache_path": "path/to/cache"
     }
 }
