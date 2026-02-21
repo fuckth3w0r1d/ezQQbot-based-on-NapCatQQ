@@ -897,3 +897,4 @@ int main()
     m.start();
     return 0;
 }
+// g++ src/main.cpp -o bot.exe -Iinclude -IC:/msys64/mingw64/include -LC:/msys64/mingw64/lib -lssl -lcrypto -lcrypt32 -lws2_32 -lpthread
