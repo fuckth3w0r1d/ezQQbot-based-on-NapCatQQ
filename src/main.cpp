@@ -49,10 +49,11 @@ const std::string B23_CLIENT_HOST = cfg.getB23Host();
 const int B23_CLIENT_PORT = cfg.getB23Port();
 const std::string B23_QUERY_PATH = cfg.getB23GetQueryPath();
 const std::string B23_PLAY_PATH = cfg.getB23GetPlayPath();
-// 本地缓存
+// 本地文件缓存
 const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
 const std::filesystem::path CACHE_PATH = cfg.getCachePath();
 const size_t DOWNLOAD_BUFFER_SIZE = cfg.getDownloadBufferSize();
+const size_t CACHE_FILE_LIMIT = cfg.getCacheFileLimit();
 
 // 消息结构
 struct ParsedMsgSegments{
@@ -208,6 +209,190 @@ public:
     }
 };
 
+//////////
+// 文件管理器
+///////////
+class FileManager{
+private:
+    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> file_mutex_map; // 文件锁表
+    static std::mutex map_mutex; // 保护文件锁表本身
+    // 获取文件锁
+    static std::shared_ptr<std::mutex> getFileMutex(const std::string& path)
+    {
+        std::lock_guard<std::mutex> lock(map_mutex); // 文件锁表上锁
+        if(file_mutex_map.find(path) == file_mutex_map.end())
+        {
+            file_mutex_map[path] = std::make_shared<std::mutex>();
+        }
+        return file_mutex_map[path];
+    }
+
+    static bool isValidFilename(const std::string& filename)
+    {
+        // 非空
+        if(filename.empty())
+        {
+            Logger::warn("文件名为空", "");
+            return false;
+        }
+        // 检查文件名结尾空格或点
+        if(!filename.empty() && (filename.back() == ' ' || filename.back() == '.'))
+        {
+            Logger::warn("文件名不能以空格或点结尾: ", filename);
+            return false;
+        }
+        // 检查ASCII控制字符 (0x00-0x1F)
+        for (char c : filename)
+        {
+            if (static_cast<unsigned char>(c) < 32)
+            {
+                Logger::warn("文件名包含控制字符", filename);
+                return false;
+            }
+        }
+        // 非法字符
+        std::string illegal_chars = "<>:\"/\\|?*";
+        for (char c : illegal_chars)
+        {
+            if (filename.find(c) != std::string::npos)
+            {
+                Logger::warn("文件名包含非法字符", filename);
+                return false;
+            }
+        }
+        return true;
+    }
+
+public:
+    // 缓存清理函数
+    static void cleanCache()
+    {
+        std::filesystem::path cache_dir = CACHE_PATH;
+        if(!std::filesystem::exists(cache_dir)) return;
+        // 收集所有文件
+        std::vector<std::filesystem::path> files;
+        for(const auto& entry : std::filesystem::directory_iterator(cache_dir))
+        {
+            if (entry.is_regular_file())
+            {
+                files.push_back(entry.path());
+            }
+        }
+        // 如果文件数量小于等于限制则不清理
+        if(files.size() <= CACHE_FILE_LIMIT)
+        {
+            Logger::info("缓存文件数量可接受, 无需清理, 当前缓存文件数量: ", files.size());
+            return;
+        }
+        // 按最后修改时间排序（最旧的在前）
+        std::sort(files.begin(), files.end(), 
+                  [](const std::filesystem::path& a, const std::filesystem::path& b){
+                      return std::filesystem::last_write_time(a) < std::filesystem::last_write_time(b);
+                  });
+        // 计算需要删除的数量
+        size_t files_to_delete = files.size() - CACHE_FILE_LIMIT;
+        Logger::info("缓存文件数量超过10, 将删除最旧的文件, 需清理文件数: ", files_to_delete);
+        // 删除最旧的文件
+        for(size_t i = 0; i < files_to_delete; i++) 
+        {
+            std::error_code ec;
+            std::filesystem::remove(files[i], ec);
+            if(!ec)
+            {
+                Logger::info("已删除旧缓存: ", files[i].filename().string()); 
+                // 从锁表中移除
+                std::lock_guard<std::mutex> lock(map_mutex);
+                file_mutex_map.erase(files[i].generic_string());
+            }
+        }
+    }
+    // 下载函数
+    static std::string downloadFile(const std::string& url, const httplib::Headers& headers, const std::string& filename)
+    {
+        // 先清理缓存
+        cleanCache();
+        // 检查文件名称
+        if(!isValidFilename(filename)) return "";
+        // 使用正则表达式解析url
+        std::regex url_pattern(R"(https?://([^/:]+)(:\d+)?(/.*))");
+        std::smatch match;
+        if(!std::regex_match(url, match, url_pattern))
+        {
+            Logger::error("URL 解析失败", url);
+            return "";
+        }
+        std::string host = match[1];
+        std::string path = match[3];
+        // 创建 cache 目录
+        std::filesystem::path cache_dir = CACHE_PATH;
+        std::filesystem::create_directories(cache_dir); // 这个函数是原子操作
+        Logger::info("cache目录: ", cache_dir);
+        // 获取下载文件路径
+        std::filesystem::path save_path = cache_dir / filename;
+        std::shared_ptr<std::mutex> file_mutex = getFileMutex(save_path.generic_string());
+        std::lock_guard<std::mutex> file_lock(*file_mutex); // 上锁
+        if(std::filesystem::exists(save_path))
+        {
+            Logger::info("cache目录中已经存在文件", filename);
+            return save_path.generic_string();
+        }
+        // 建立SSL客户端
+        httplib::SSLClient cli(host);
+        cli.set_follow_location(true);
+        cli.enable_server_certificate_verification(false); // 下载关闭证书
+        cli.set_read_timeout(60);   // 防止卡死
+        cli.set_write_timeout(60);
+        // 创建文件
+        std::ofstream ofs(save_path, std::ios::binary);
+        if (!ofs.is_open())
+        {
+            Logger::error("文件创建失败: ", save_path.generic_string());
+            return "";
+        }
+        // 设置下载缓冲区
+        std::unique_ptr<char[]> buffer(new char[DOWNLOAD_BUFFER_SIZE]);
+        ofs.rdbuf()->pubsetbuf(buffer.get(), DOWNLOAD_BUFFER_SIZE);
+        // 流式下载
+        std::atomic<size_t> downloaded_size{0};
+        bool size_limit_exceeded = false;
+        auto res = cli.Get(path, headers, [&](const char* data, size_t data_length){
+                if(downloaded_size.load() + data_length > DOWNLOAD_SIZE_LIMIT)
+                {
+                    size_limit_exceeded = true;
+                    Logger::warn("下载过程中超过大小限制: ", downloaded_size + data_length);
+                    return false;  // 返回 false 中断下载
+                }
+                ofs.write(data, data_length);
+                downloaded_size += data_length; 
+                return true;
+            });
+        ofs.close();
+        if (!res)
+        {
+            Logger::error("文件下载失败", httplib::to_string(res.error()));
+            std::filesystem::remove(save_path);
+            return "";
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("文件下载异常 HTTP状态码: ", res->status);
+            std::filesystem::remove(save_path);
+            return "";
+        }
+        // 检查是否下载超过大小停止
+        if(size_limit_exceeded)
+        {
+            std::filesystem::remove(save_path);
+            return "";
+        }
+        // 返回路径
+        Logger::info("文件已下载到: ", save_path.generic_string());
+        return save_path.generic_string(); // generic_string方法, 使用 / 
+    }
+};
+// 定义文件锁表
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> FileManager::file_mutex_map;
+std::mutex FileManager::map_mutex;
 
 //////////
 // 文本指令接口
@@ -584,7 +769,7 @@ private:
     {
         std::string qqdocurl = data["meta"]["detail_1"]["qqdocurl"].get<std::string>();
         // 使用正则表达式解析url
-        static std::regex url_pattern(R"(https://([^/]+)(/.*))");
+        std::regex url_pattern(R"(https?://([^/:]+)(:\d+)?(/.*))");
         std::smatch url_match;
         if(!std::regex_match(qqdocurl, url_match, url_pattern))
         {
@@ -593,7 +778,7 @@ private:
         }
         // 找到qq分享的b站视频链接的 host 和 path
         std::string host = url_match[1];
-        std::string path = url_match[2];
+        std::string path = url_match[3];
         httplib::SSLClient cli(host, 443); // 默认443端口
         auto res = cli.Head(path); // 这里仅为了获取重定向后的url, 所以用Head
         if(!res)
@@ -603,7 +788,7 @@ private:
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
         // 正则匹配获取bvid
-        static std::regex bv_pattern(R"(BV[A-Za-z0-9]{10})");
+        std::regex bv_pattern(R"(BV[A-Za-z0-9]{10})");
         std::smatch bv_match; 
         if (std::regex_search(real_url, bv_match, bv_pattern))
             return bv_match[0];  // 返回匹配到的BV号
@@ -656,79 +841,7 @@ private:
         bvinfo.size = data["data"]["durl"][0]["size"].get<size_t>();
         Logger::info("获取视频大小: ", bvinfo.size);
     }   
-    // 下载视频
-    std::string downloadBV(const BVinfo& bvinfo)
-    {
-        // 使用正则表达式解析url
-        static std::regex url_pattern(R"(https://([^/]+)(/.*))");
-        std::smatch match;
-        if(!std::regex_match(bvinfo.url, match, url_pattern))
-        {
-            Logger::error("URL 解析失败", bvinfo.url);
-            return "";
-        }
-        std::string host = match[1];
-        std::string path = match[2];
-        // 创建 cache 目录
-        std::filesystem::path cache_dir = CACHE_PATH;
-        if(!std::filesystem::exists(cache_dir))
-        {
-            std::filesystem::create_directories(cache_dir);
-            Logger::info("cache目录不存在, 已创建: ", cache_dir.generic_string());
-        }else{
-            Logger::info("cache目录已存在: ", cache_dir.generic_string());
-        }
-        // 使用bvid作文件名
-        std::string filename = bvinfo.bvid + ".mp4";
-        std::filesystem::path save_path = cache_dir / filename;
-        if(std::filesystem::exists(save_path))
-        {
-            Logger::info("cache目录中存在视频", bvinfo.bvid);
-            return save_path.generic_string();
-        }
-        // 建立SSL客户端
-        httplib::SSLClient cli(host);
-        cli.set_follow_location(true);
-        cli.enable_server_certificate_verification(false); // 下载B站视频, 关闭证书
-        cli.set_read_timeout(60);   // 防止卡死
-        cli.set_write_timeout(60);
-        httplib::Headers headers = {
-            {"Referer", "https://www.bilibili.com"},
-            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        };
-        // 创建文件
-        std::ofstream ofs(save_path, std::ios::binary);
-        if (!ofs.is_open())
-        {
-            Logger::error("文件创建失败: ", save_path.generic_string());
-            return "";
-        }
-        // 设置下载缓冲区
-        std::unique_ptr<char[]> buffer(new char[DOWNLOAD_BUFFER_SIZE]);
-        ofs.rdbuf()->pubsetbuf(buffer.get(), DOWNLOAD_BUFFER_SIZE);
-        // 流式下载
-        auto res = cli.Get(path, headers, [&](const char* data, size_t data_length){
-                ofs.write(data, data_length); 
-                return true;  // 返回 false 可中断下载
-            });
-        ofs.close();
-        if (!res)
-        {
-            Logger::error("B站视频下载失败", httplib::to_string(res.error()));
-            std::filesystem::remove(save_path);
-            return "";
-        }
-        if(res->status != 200)
-        {
-            Logger::warn("B站视频下载异常 HTTP状态码: ", res->status);
-            std::filesystem::remove(save_path);
-            return "";
-        }
-        // 返回路径
-        Logger::info("视频已下载到: ", save_path.generic_string());
-        return save_path.generic_string(); // generic_string方法, 使用 / 
-    }
-
+    
     // 处理B站视频
     std::pair<std::string, std::string> handleBV(const json& data)
     {
@@ -767,7 +880,11 @@ private:
         result += "\n分享数: " + std::to_string(bvinfo.share);
         result += "\n点赞数: " + std::to_string(bvinfo.like);
         // 下载B站视频
-        std::string video_path = downloadBV(bvinfo);
+        httplib::Headers headers = {
+            {"Referer", "https://www.bilibili.com"},
+            {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        };
+        std::string video_path = FileManager::downloadFile(bvinfo.url, headers, bvinfo.bvid + ".mp4");
         return std::make_pair(result, video_path);
     }
 public:
@@ -792,7 +909,7 @@ public:
                     {
                         result.emplace_back(MessageManager::buildMsg("video", "file:///" + video_path));
                     }else{
-                        result.emplace_back(MessageManager::buildMsg("text", "\n视频太大了, bot的主人拒绝下载"));
+                        result.emplace_back(MessageManager::buildMsg("text", "视频下载异常, 可能是视频太大了"));
                     }
                     return result;
                 }

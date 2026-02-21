@@ -152,4 +152,9 @@ public:
     {
         return data["file"]["download_buffer_size"].get<const size_t>();
     }
+
+    const size_t getCacheFileLimit()
+    {
+        return data["file"]["cache_file_limit"].get<const size_t>();
+    }
 };
