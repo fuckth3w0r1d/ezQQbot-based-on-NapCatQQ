@@ -36,6 +36,7 @@
     "file": {
         "download_size_limit": 300000000,
         "cache_path": "path/to/cache",
+        "cache_file_limit": 10,
         "buffer_size": 6400
     }
 }
