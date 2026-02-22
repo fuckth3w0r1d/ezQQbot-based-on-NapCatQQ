@@ -54,6 +54,11 @@ const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
 const std::filesystem::path CACHE_PATH = cfg.getCachePath();
 const size_t DOWNLOAD_BUFFER_SIZE = cfg.getDownloadBufferSize();
 const size_t CACHE_FILE_LIMIT = cfg.getCacheFileLimit();
+// 随机图片
+const std::string IMG_CLIENT_HOST = cfg.getRandomImgHost();
+const int IMG_CLIENT_PORT = cfg.getRandomImgPort();
+const std::string IMG_GET_PATH = cfg.getRandomImgPath();
+
 
 // 消息结构
 struct ParsedMsgSegments{
@@ -400,7 +405,7 @@ std::mutex FileManager::map_mutex;
 class Command{
 public:
     virtual std::string name() = 0;
-    virtual std::string execute(const std::string& args) = 0;
+    virtual json execute(const std::string& args) = 0;
     virtual ~Command() = default;
 };
 
@@ -420,10 +425,10 @@ public:
     {
         return "帮助";
     }
-    std::string execute(const std::string& args) override
+    json execute(const std::string& args) override
     {
         // 返回维护的指令列表
-        return "指令格式: @我 指令\n当前支持的指令:\n" + cmd_list;
+        return MessageManager::buildMsg("text", "指令格式: @我 指令\n当前支持的指令:\n" + cmd_list);
     }
     ~HelpCommand() override
     {
@@ -453,9 +458,9 @@ public:
     {
         return "时间";
     }
-    std::string execute(const std::string& args) override
+    json execute(const std::string& args) override
     {
-        return getFormattedTime();
+        return MessageManager::buildMsg("text", getFormattedTime());
     }
     ~TimeCommand() override
     {
@@ -522,7 +527,7 @@ public:
     {
         return "天气";
     }
-    std::string execute(const std::string& args) override
+    json execute(const std::string& args) override
     {
         std::string city = getCityName(args);
         httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
@@ -552,7 +557,7 @@ public:
         result += "\n风向: " + winfo.winddir + "风 " + winfo.windpow + "级";
         result += "\n湿度: " + winfo.humidity + "%";
         result += "\n查询时间: " + winfo.reporttime;
-        return result;
+        return MessageManager::buildMsg("text", result);
     }
     ~WeatherCommand() override
     {
@@ -641,19 +646,55 @@ public:
         return "AI对话";
     }
 
-    std::string execute(const std::string& args) override
+    json execute(const std::string& args) override
     {
         if(args.empty())
         {
-            return "请输入对话内容, 例如 AI对话 对话内容";
+            return MessageManager::buildMsg("text", "请输入对话内容, 例如 AI对话 对话内容");
         }
-        return askAI(args);
+        return MessageManager::buildMsg("text", askAI(args));
     }
     ~AICommand() override
     {
         return;
     }
 };
+
+// 随机图片
+class RandomImgCommand : public Command{
+public:
+    std::string name() override
+    {
+        return "随机二次元图片";
+    }
+
+    json execute(const std::string& args) override
+    {
+        httplib::SSLClient cli(IMG_CLIENT_HOST, IMG_CLIENT_PORT);
+        auto res = cli.Get(IMG_GET_PATH);
+        if(!res)
+        {
+            Logger::error("随机图片网络请求失败", httplib::to_string(res.error()));
+            return MessageManager::buildMsg("text", "随机图片网络请求失败");
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("随机图片请求 HTTP状态码: ", res->status);
+            Logger::error("随机图片请求 异常响应体:", json::parse(res->body).dump(4));
+            return MessageManager::buildMsg("text", "随机图片网络请求异常");
+        }
+        json data = json::parse(res->body);
+        std::string img_url = data["url"].get<std::string>();
+        return MessageManager::buildMsg("image", img_url);
+    }   
+
+    ~RandomImgCommand() override
+    {
+        return;
+    }
+};
+
+
 
 ///////////
 // 任务管理器接口
@@ -699,6 +740,7 @@ public:
         registerCommand(std::make_unique<TimeCommand>());
         registerCommand(std::make_unique<WeatherCommand>());
         registerCommand(std::make_unique<AICommand>());
+        registerCommand(std::make_unique<RandomImgCommand>());
         // 后续文本指令也在此注册
         registerCommand(std::make_unique<HelpCommand>(getCommandList()));
     }
@@ -732,10 +774,9 @@ public:
         json result = json::array();
         if(cmd_map.count(cmd_name))
         {
-            // 调用对应文本指令
-            std::string reply_text = cmd_map[cmd_name]->execute(cmd_args);
+            // 调用对应指令
             result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
-            result.emplace_back(MessageManager::buildMsg("text", reply_text));
+            result.emplace_back(cmd_map[cmd_name]->execute(cmd_args));
             return result;
         }
         result.emplace_back(MessageManager::buildMsg("text", "未知指令: " + cmd_name));
@@ -785,6 +826,12 @@ private:
         {
             Logger::error("B站短链网络请求失败", httplib::to_string(res.error()));
             return "B站视频短链网络请求失败";
+        }
+        if(res->status != 302)
+        {
+            Logger::warn("B站短链 HTTP状态码: ", res->status);
+            Logger::error("B站短链 异常响应体:", json::parse(res->body).dump(4));
+            return "B站视频短链网络请求异常";
         }
         std::string real_url = res->get_header_value("Location"); // 获取重定向后的真正B站url
         // 正则匹配获取bvid

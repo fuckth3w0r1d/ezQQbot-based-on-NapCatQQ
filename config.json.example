@@ -38,5 +38,10 @@
         "cache_path": "path/to/cache",
         "cache_file_limit": 10,
         "buffer_size": 6400
+    },
+    "random_img": {
+        "host": "www.loliapi.com",
+        "port": 443,
+        "path": "/bg/?id=23&type=json"
     }
 }

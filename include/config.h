@@ -157,4 +157,19 @@ public:
     {
         return data["file"]["cache_file_limit"].get<const size_t>();
     }
+
+    const std::string getRandomImgHost()
+    {
+        return data["random_img"]["host"].get<const std::string>();
+    }
+
+    const int getRandomImgPort()
+    {
+        return data["random_img"]["port"].get<const int>();
+    }
+
+    const std::string getRandomImgPath()
+    {
+        return data["random_img"]["path"].get<const std::string>();
+    }
 };
