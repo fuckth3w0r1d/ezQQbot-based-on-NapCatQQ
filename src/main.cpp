@@ -671,6 +671,27 @@ public:
 
 // 随机图片
 class RandomImgCommand : public Command{
+private:
+    std::string getImgUrl()
+    {
+        httplib::SSLClient cli(IMG_CLIENT_HOST, IMG_CLIENT_PORT);
+        auto res = cli.Get(IMG_GET_PATH);
+        if(!res)
+        {
+            Logger::error("随机图片网络请求失败", httplib::to_string(res.error()));
+            return "";
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("随机图片请求 HTTP状态码: ", res->status);
+            Logger::error("随机图片请求 异常响应体:", json::parse(res->body).dump(4));
+            return "";
+        }
+        json data = json::parse(res->body);
+        std::string img_url = data["url"].get<std::string>();
+        return img_url;
+    }
+
 public:
     std::string name() override
     {
@@ -679,22 +700,7 @@ public:
 
     json execute(const std::string& args) override
     {
-        httplib::SSLClient cli(IMG_CLIENT_HOST, IMG_CLIENT_PORT);
-        auto res = cli.Get(IMG_GET_PATH);
-        if(!res)
-        {
-            Logger::error("随机图片网络请求失败", httplib::to_string(res.error()));
-            return MessageManager::buildMsg("text", "随机图片网络请求失败");
-        }
-        if(res->status != 200)
-        {
-            Logger::warn("随机图片请求 HTTP状态码: ", res->status);
-            Logger::error("随机图片请求 异常响应体:", json::parse(res->body).dump(4));
-            return MessageManager::buildMsg("text", "随机图片网络请求异常");
-        }
-        json data = json::parse(res->body);
-        std::string img_url = data["url"].get<std::string>();
-        return MessageManager::buildMsg("image", img_url);
+        return MessageManager::buildMsg("image", getImgUrl());
     }   
 
     ~RandomImgCommand() override
