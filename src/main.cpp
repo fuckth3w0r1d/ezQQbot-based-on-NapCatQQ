@@ -522,14 +522,14 @@ private:
         result.reporttime = data["reporttime"].get<std::string>();
         return result;
     }
-public:
-    std::string name() override
-    {
-        return "天气";
-    }
-    json execute(const std::string& args) override
+    // 访问Amap api获取信息
+    std::string askAmap(const std::string& args)
     {
         std::string city = getCityName(args);
+        if(city.empty())
+        {
+            return "请输入城市名称, 格式: 天气 城市名称";
+        }
         httplib::SSLClient cli(AMAP_CLIENT_HOST, AMAP_CLIENT_PORT);
         auto res = cli.Get(AMAP_GET_PATH + "?city=" + city + "&key=" + AMAP_KEY);
         if(!res)
@@ -557,7 +557,16 @@ public:
         result += "\n风向: " + winfo.winddir + "风 " + winfo.windpow + "级";
         result += "\n湿度: " + winfo.humidity + "%";
         result += "\n查询时间: " + winfo.reporttime;
-        return MessageManager::buildMsg("text", result);
+        return result;
+    }
+public:
+    std::string name() override
+    {
+        return "天气";
+    }
+    json execute(const std::string& args) override
+    {
+        return MessageManager::buildMsg("text", askAmap(args));
     }
     ~WeatherCommand() override
     {
@@ -586,6 +595,10 @@ private:
     // 与AI交互
     std::string askAI(const std::string& args)
     {
+        if(args.empty())
+        {
+            return "请输入对话内容, 例如 AI对话 对话内容";
+        }
         httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
         json body;
         httplib::Headers headers = {
@@ -648,10 +661,6 @@ public:
 
     json execute(const std::string& args) override
     {
-        if(args.empty())
-        {
-            return MessageManager::buildMsg("text", "请输入对话内容, 例如 AI对话 对话内容");
-        }
         return MessageManager::buildMsg("text", askAI(args));
     }
     ~AICommand() override
