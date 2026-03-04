@@ -2,22 +2,22 @@
 使用 Cpp 编写的 qq 机器人, 实现了一些文本指令响应和`Json`卡片分享的解析功能。
 
 ### 环境说明
-- Windows 11  
+- Ubuntu 24.04  
 
-- NapCat v4.17.11
+- NapCat v4.17.29
 
 - OpenSSL
 
   ```shell
-  > openssl version
-  OpenSSL 3.6.1 27 Jan 2026 (Library: OpenSSL 3.6.1 27 Jan 2026)
+  $ openssl version
+  OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)
   ```
 
 - 编译器
 
   ```shell
-  > g++ --version
-  g++.exe (GCC) 13.2.0
+  $ g++ --version
+  g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
   Copyright (C) 2023 Free Software Foundation, Inc.
   This is free software; see the source for copying conditions.  There is NO
   warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
@@ -26,7 +26,7 @@
 - 编译命令
 
   ```shell
-  g++ src/main.cpp -O2 -Iinclude -o bot.exe -lssl -lcrypto -lcrypt32 -lws2_32 -lpthread
+  g++ src/main.cpp -O2 -Iinclude -o bot -lssl -lcrypto -lpthread
   ```
 
 ### 主要特性
