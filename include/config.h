@@ -15,7 +15,7 @@ private:
 public:
     Config()
     {
-        std::ifstream file("config.json"); // config.json在项目根目录, 编译出的bot.exe也在项目根目录
+        std::ifstream file("/home/r3t2/ezQQbot-based-on-NapCatQQ/config.json"); // config.json在项目根目录, 编译出的bot.exe也在项目根目录
         if (!file.is_open()) 
         {
             std::cerr << "无法打开文件" << std::endl;

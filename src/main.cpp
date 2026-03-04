@@ -7,7 +7,8 @@
 #include <cstddef>
 #include <regex>
 #include <filesystem>
-#include <fstream>  
+#include <fstream>
+#include <unistd.h>  
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
@@ -443,10 +444,9 @@ private:
     { 
         time_t now = time(0);
         tm local_time;
-        errno_t err = localtime_s(&local_time, &now);
-        if (err != 0)
+        if(localtime_r(&now, &local_time) == nullptr)
         {
-            Logger::error("获取本地时间失败, 错误码: ", err);
+            Logger::error("获取本地时间失败", "");
             return "时间获取失败";
         }
         char buffer[80];
@@ -1076,4 +1076,4 @@ int main()
     m.start();
     return 0;
 }
-// g++ src/main.cpp -o bot.exe -Iinclude -IC:/msys64/mingw64/include -LC:/msys64/mingw64/lib -lssl -lcrypto -lcrypt32 -lws2_32 -lpthread
+// g++ src/main.cpp -O2 -Iinclude -o bot -lssl -lcrypto -lpthread
