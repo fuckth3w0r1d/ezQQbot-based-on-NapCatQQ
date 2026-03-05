@@ -80,37 +80,42 @@ public:
 
     const std::string getAIKey()
     {
-        return data["ai_api"]["key"].get<const std::string>();
+        return data["ai"]["key"].get<const std::string>();
     }
 
     const std::string getAIHost()
     {
-        return data["ai_api"]["host"].get<const std::string>();
+        return data["ai"]["host"].get<const std::string>();
     }
 
     const int getAIPort()
     {
-        return data["ai_api"]["port"].get<const int>();
+        return data["ai"]["port"].get<const int>();
     }
 
     const std::string getAIPostPath()
     {
-        return data["ai_api"]["path"].get<const std::string>();
+        return data["ai"]["path"].get<const std::string>();
     }
 
     const std::string getAIModel()
     {
-        return data["ai_api"]["model"].get<const std::string>();
+        return data["ai"]["model"].get<const std::string>();
     }
 
     const std::string getAISysPrompts()
     {
-        return data["ai_api"]["system_prompts"].get<const std::string>();
+        return data["ai"]["system_prompts"].get<const std::string>();
     }
 
     const int getAIMaxTokens()
     {
-        return data["ai_api"]["max_tokens"].get<const int>();
+        return data["ai"]["max_tokens"].get<const int>();
+    }
+
+    const int getMaxChatHistory()
+    {
+        return data["ai"]["max_history"].get<const int>();
     }
 
     const std::string getB23Appid()

@@ -36,14 +36,15 @@ const std::string AMAP_KEY = cfg.getAmapKey();
 const std::string AMAP_CLIENT_HOST = cfg.getAmapHost();
 const int AMAP_CLIENT_PORT = cfg.getAmapPort();
 const std::string AMAP_GET_PATH = cfg.getAmapGetPath();
-// ai
+// ai chat
 const std::string AI_KEY = cfg.getAIKey();
 const std::string AI_CLIENT_HOST = cfg.getAIHost();
 const int AI_CLIENT_PORT = cfg.getAIPort();
 const std::string AI_POST_PATH = cfg.getAIPostPath();
 const std::string AI_MODEL = cfg.getAIModel();
-const std::string AI_SYS_PROMPTS = cfg.getAISysPrompts();
+const std::string AI_DEFAULT_SYS_PROMPTS = cfg.getAISysPrompts();
 const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
+const int MAX_CHAT_HISTORY = cfg.getMaxChatHistory();
 // bilibili
 const std::string B23_APP_ID = cfg.getB23Appid();
 const std::string B23_CLIENT_HOST = cfg.getB23Host();
@@ -180,7 +181,7 @@ public:
     {
         MessageContext msgctx;
         msgctx.msg_type = data["message_type"].get<std::string>();
-        if (msgctx.msg_type == "group") msgctx.group_id = std::to_string(data["group_id"].get<size_t>());
+        if(msgctx.msg_type == "group") msgctx.group_id = std::to_string(data["group_id"].get<size_t>());
         msgctx.user_id = std::to_string(data["user_id"].get<size_t>());
         msgctx.msg_segments = data["message"].get<json>();
         msgctx.pmsgsegs = parseMsgSegments(msgctx.msg_segments);
@@ -221,11 +222,11 @@ public:
 class FileManager{
 private:
     static std::unordered_map<std::string, std::shared_ptr<std::mutex>> file_mutex_map; // 文件锁表
-    static std::mutex map_mutex; // 保护文件锁表本身
+    static std::mutex file_mutex_map_lock; // 保护文件锁表本身
     // 获取文件锁
     static std::shared_ptr<std::mutex> getFileMutex(const std::string& path)
     {
-        std::lock_guard<std::mutex> lock(map_mutex); // 文件锁表上锁
+        std::lock_guard<std::mutex> lock(file_mutex_map_lock); // 文件锁表上锁
         if(file_mutex_map.find(path) == file_mutex_map.end())
         {
             file_mutex_map[path] = std::make_shared<std::mutex>();
@@ -248,7 +249,7 @@ private:
             return false;
         }
         // 检查ASCII控制字符 (0x00-0x1F)
-        for (char c : filename)
+        for(char c : filename)
         {
             if (static_cast<unsigned char>(c) < 32)
             {
@@ -258,7 +259,7 @@ private:
         }
         // 非法字符
         std::string illegal_chars = "<>:\"/\\|?*";
-        for (char c : illegal_chars)
+        for(char c : illegal_chars)
         {
             if (filename.find(c) != std::string::npos)
             {
@@ -307,7 +308,7 @@ public:
             {
                 Logger::info("已删除旧缓存: ", files[i].filename().string()); 
                 // 从锁表中移除
-                std::lock_guard<std::mutex> lock(map_mutex);
+                std::lock_guard<std::mutex> lock(file_mutex_map_lock);
                 file_mutex_map.erase(files[i].generic_string());
             }
         }
@@ -398,7 +399,7 @@ public:
 };
 // 定义文件锁表
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> FileManager::file_mutex_map;
-std::mutex FileManager::map_mutex;
+std::mutex FileManager::file_mutex_map_lock;
 
 //////////
 // 文本指令接口
@@ -896,37 +897,75 @@ public:
     }
 };
 
-// AI对话
-class AITaskManager : public BaseTaskManager{
+// AI对话任务
+class ChatTaskManager : public BaseTaskManager{
 private:
     // AI 对话历史结构体
-    struct AIMemCtx{
+    struct ChatMemCtx{
         std::string role;
         std::string content;
     };
-    static std::unordered_map<std::string, std::vector<AIMemCtx>> chat_memory;
-    static std::mutex chat_mutex;
-    // AI回复信息结构体
-    struct AIinfo{
-        std::string model;
-        std::string reply;
-        int tokens;
-    };
-    // 获取回复信息
-    AIinfo getAIinfo(const json& raw_data)
+    // 对话历史保存
+    static std::unordered_map<std::string, std::vector<ChatMemCtx>> chat_memory;
+    // 对话历史表锁表
+    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> chat_mutex_map;
+    // 保护对话历史表锁表的锁
+    static std::mutex chat_mutex_map_lock;
+    // 获取对话 session id
+    std::string getSessionId(const MessageContext& msgctx)
     {
-        AIinfo result;
-        result.model = raw_data["model"].get<std::string>();
-        result.reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
-        result.tokens = raw_data["usage"]["total_tokens"].get<int>();
-        return result;
+        if(msgctx.msg_type == "group")
+        {
+            return "group_" + msgctx.group_id + "_user_" + msgctx.user_id;
+        }else{
+            return "private_" + msgctx.user_id;
+        }
+        return "";
+    }
+    // 获取或者创建 session 对应的锁
+    std::shared_ptr<std::mutex> getSessionMutex(const std::string& session_id)
+    {
+        std::lock_guard<std::mutex> lock(chat_mutex_map_lock);
+        if(chat_mutex_map.find(session_id) == chat_mutex_map.end())
+        {
+            chat_mutex_map[session_id] = std::make_shared<std::mutex>();
+        }
+        return chat_mutex_map[session_id];
+    }
+    // 获取或者创建 session 对应的对话历史
+    std::vector<ChatMemCtx> getSessionHistory(const std::string& session_id)
+    {
+        // 上锁
+        std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
+        std::lock_guard<std::mutex> session_lock(*session_mutex);
+        return chat_memory[session_id];
+    }
+    // 更新对话历史
+    void UpdateChatMemory(const std::string& session_id, const std::string& user_input, const std::string& ai_reply)
+    {
+        ChatMemCtx mem1;
+        ChatMemCtx mem2;
+        mem1.role = "user";
+        mem1.content = user_input;
+        mem2.role = "assistant";
+        mem2.content = ai_reply;
+        // 先上锁
+        std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
+        std::lock_guard<std::mutex> session_lock(*session_mutex);
+        chat_memory[session_id].emplace_back(mem1);
+        chat_memory[session_id].emplace_back(mem2);
+        // 如果历史过多则清理历史
+        if(chat_memory[session_id].size() > MAX_CHAT_HISTORY)
+        {
+            chat_memory[session_id].erase(chat_memory[session_id].begin(), chat_memory[session_id].begin()+2);
+        }
     }
     //与AI交互
-    std::string askAI(const std::string& args)
+    std::string askAI(const std::string& session_id, const std::string& user_input)
     {
-        if(args.empty())
+        if(user_input.empty())
         {
-            return "请输入对话内容, 例如 AI对话 对话内容";
+            return "请输入对话内容";
         }
         httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
         json body;
@@ -934,17 +973,31 @@ private:
             {"Authorization", "Bearer " + AI_KEY},
             {"Content-Type", "application/json"}
         };
-        body["model"] = AI_MODEL;
-        body["messages"] = json::array({
-            {
-                {"role", "system"},
-                {"content", AI_SYS_PROMPTS}
-            },
-            {
-                {"role", "user"},
-                {"content", args}
-            }
+        // 获取或者创建对话历史
+        auto history = getSessionHistory(session_id);
+        Logger::info("获取对话历史成功, 轮数: ", history.size()/2);
+        json messages = json::array();
+        // 加入系统提示词
+        messages.push_back({
+            {"role","system"},
+            {"content",AI_DEFAULT_SYS_PROMPTS}
         });
+        // 加入对话历史
+        for(auto& msg : history)
+        {
+            messages.push_back({
+                {"role", msg.role},
+                {"content", msg.content}
+            });
+        }
+        // 加入用户输入
+        messages.push_back({
+            {"role", "user"},
+            {"content", user_input}
+        });
+        // 构造请求体
+        body["model"] = AI_MODEL;
+        body["messages"] = messages;
         body["max_tokens"] = AI_MAX_TOKENS;
         auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
         // 硅基流动 post 请求示例
@@ -976,11 +1029,11 @@ private:
             Logger::warn("AI回复异常", raw_data.dump(4));
             return "AI 回复异常";
         }
-        AIinfo ainfo = getAIinfo(raw_data);
-        std::string reply = "模型: " + ainfo.model; 
-        reply += "\nAI回复内容: " + ainfo.reply;
-        reply += "\n使用 token: " + std::to_string(ainfo.tokens);
-        return reply;
+        std::string ai_reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        Logger::info("获取ai回复成功, 长度: ", ai_reply.length()); 
+        UpdateChatMemory(session_id, user_input, ai_reply);
+        Logger::info("更新对应 session 对话历史成功, 轮数: ", chat_memory[session_id].size()/2);
+        return ai_reply;
     }
 public:
     bool canHandle(const MessageContext& msgctx) override
@@ -990,10 +1043,14 @@ public:
 
     json handleTask(const MessageContext& msgctx) override
     {
-        return MessageManager::buildMsg("text", askAI(msgctx.pmsgsegs.text));
+        std::string session_id = getSessionId(msgctx);
+        std::string user_input = msgctx.pmsgsegs.text;
+        return MessageManager::buildMsg("text", askAI(session_id, user_input));
     }
 };
-
+std::unordered_map<std::string, std::vector<ChatTaskManager::ChatMemCtx>> ChatTaskManager::chat_memory;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::chat_mutex_map;
+std::mutex ChatTaskManager::chat_mutex_map_lock;
 
 
 //////////////
@@ -1012,7 +1069,7 @@ public:
     {
         // 注册特定任务管理器
         registerTaskManager(std::make_unique<CmdTaskManager>());
-        registerTaskManager(std::make_unique<AITaskManager>()); // 注意这里AI任务优先级低于命令任务
+        registerTaskManager(std::make_unique<ChatTaskManager>()); // 注意这里AI任务优先级低于命令任务
         registerTaskManager(std::make_unique<JsonTaskManager>());
     }
     // 总的任务处理函数
