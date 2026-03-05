@@ -131,33 +131,60 @@ public:
     static void send_msg(const MessageContext& recv, const json& reply)
     {
         httplib::Client cli(SERVER_HOST, SERVER_PORT);
-        // 构造消息体
-        json body;
-        if(recv.msg_type == "group")
+        json normal_segments = json::array();
+        json video_segments = json::array();
+        // 分类 segment
+        for(const auto& seg : reply)
         {
-            body["group_id"] = recv.group_id;
-            body["message"] = reply;
+            if(seg.contains("type") && seg["type"] == "video")
+                video_segments.push_back(seg);
+            else
+                normal_segments.push_back(seg);
         }
-        if(recv.msg_type == "private")
-        {
-            body["user_id"] = recv.user_id;
-            body["message"] = reply;
-        }
-        // 注意加上 token
         httplib::Headers headers = {
             {"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}
         };
         std::string path = (recv.msg_type == "group") ? "/send_group_msg" : "/send_private_msg";
-        auto res = cli.Post(path, headers, body.dump(), "application/json");
-        if(!res)
+        // 发送普通消息
+        if(!normal_segments.empty())
         {
-            Logger::error("消息发送失败", httplib::to_string(res.error()));
-            return;
+            json body;
+            if(recv.msg_type == "group")
+                body["group_id"] = recv.group_id;
+            else
+                body["user_id"] = recv.user_id;
+
+            body["message"] = normal_segments;
+            auto res = cli.Post(path, headers, body.dump(), "application/json");
+            if(!res)
+            {
+                Logger::error("消息发送失败", httplib::to_string(res.error()));
+            }
+            else if(res->status != 200)
+            {
+                Logger::warn("send_msg HTTP状态码: ", res->status);
+                Logger::error("send_msg 异常响应体:", json::parse(res->body).dump(4));
+            }
         }
-        if(res->status != 200)
+        // 单独发送 video
+        for(const auto& seg : video_segments)
         {
-            Logger::warn("send_msg HTTP状态码: ", res->status);
-            Logger::error("send_msg 异常响应体:", json::parse(res->body).dump(4));
+            json body;
+            if(recv.msg_type == "group")
+                body["group_id"] = recv.group_id;
+            else
+                body["user_id"] = recv.user_id;
+            body["message"] = json::array({seg});
+            auto res = cli.Post(path, headers, body.dump(), "application/json");
+            if(!res)
+            {
+                Logger::error("视频发送失败", httplib::to_string(res.error()));
+            }
+            else if(res->status != 200)
+            {
+                Logger::warn("video HTTP状态码: ", res->status);
+                Logger::error("video 异常响应体:", json::parse(res->body).dump(4));
+            }
         }
     }
     // 获取消息结构
@@ -868,7 +895,7 @@ public:
                     result.emplace_back(MessageManager::buildMsg("text", reply_text));
                     if(!video_path.empty())
                     {
-                        result.emplace_back(MessageManager::buildMsg("video", "file:///" + video_path));
+                        result.emplace_back(MessageManager::buildMsg("video", "file://" + video_path));
                     }else{
                         result.emplace_back(MessageManager::buildMsg("text", "视频下载异常, 可能是视频太大了"));
                     }
