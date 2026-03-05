@@ -131,49 +131,33 @@ public:
     static void send_msg(const MessageContext& recv, const json& reply)
     {
         httplib::Client cli(SERVER_HOST, SERVER_PORT);
-        // 群聊消息
+        // 构造消息体
+        json body;
         if(recv.msg_type == "group")
         {
-            for(auto& seg : reply)
-            {
-                json body;
-                body["group_id"] = recv.group_id;
-                body["message"] = seg;
-                // 注意加上 token 否则会 403 导致不能回复
-                httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-                auto res = cli.Post("/send_group_msg", headers, body.dump(), "application/json");
-                if (!res)
-                {
-                    Logger::error("群聊消息发送失败", httplib::to_string(res.error()));
-                }
-                if(res->status != 200)
-                {
-                    Logger::warn("send_group_msg HTTP状态码: ", res->status);
-                    Logger::error("send_group_msg 异常响应体:", json::parse(res->body).dump(4));
-                }
-            }
+            body["group_id"] = recv.group_id;
+            body["message"] = reply;
         }
-        // 私聊消息
         if(recv.msg_type == "private")
         {
-            for(auto& seg : reply)
-            {
-                json body;
-                body["user_id"] = recv.user_id;
-                body["message"] = seg;
-                // 注意加上 token 否则会 403 导致不能回复
-                httplib::Headers headers = {{"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}};
-                auto res = cli.Post("/send_private_msg", headers, body.dump(), "application/json");
-                if (!res)
-                {
-                    Logger::error("私聊消息发送失败", httplib::to_string(res.error()));
-                }
-                if(res->status != 200)
-                {
-                    Logger::warn("send_private_msg HTTP状态码: ", res->status);
-                    Logger::error("send_private_msg 异常响应体: ", json::parse(res->body).dump(4));
-                }
-            }
+            body["user_id"] = recv.user_id;
+            body["message"] = reply;
+        }
+        // 注意加上 token
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}
+        };
+        std::string path = (recv.msg_type == "group") ? "/send_group_msg" : "/send_private_msg";
+        auto res = cli.Post(path, headers, body.dump(), "application/json");
+        if(!res)
+        {
+            Logger::error("消息发送失败", httplib::to_string(res.error()));
+            return;
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("send_msg HTTP状态码: ", res->status);
+            Logger::error("send_msg 异常响应体:", json::parse(res->body).dump(4));
         }
     }
     // 获取消息结构
@@ -1045,7 +1029,10 @@ public:
     {
         std::string session_id = getSessionId(msgctx);
         std::string user_input = msgctx.pmsgsegs.text;
-        return MessageManager::buildMsg("text", askAI(session_id, user_input));
+        json result = json::array();
+        result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
+        result.emplace_back(MessageManager::buildMsg("text", askAI(session_id, user_input)));
+        return result;
     }
 };
 std::unordered_map<std::string, std::vector<ChatTaskManager::ChatMemCtx>> ChatTaskManager::chat_memory;
