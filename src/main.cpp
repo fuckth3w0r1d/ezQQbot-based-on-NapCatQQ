@@ -574,101 +574,6 @@ public:
     }
 };
 
-// AI对话
-class AICommand : public Command{
-private:
-    // AI回复信息结构体
-    struct AIinfo{
-        std::string model;
-        std::string reply;
-        int tokens;
-    };
-    // 获取回复信息
-    AIinfo getAIinfo(const json& raw_data)
-    {
-        AIinfo result;
-        result.model = raw_data["model"].get<std::string>();
-        result.reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
-        result.tokens = raw_data["usage"]["total_tokens"].get<int>();
-        return result;
-    }
-    // 与AI交互
-    std::string askAI(const std::string& args)
-    {
-        if(args.empty())
-        {
-            return "请输入对话内容, 例如 AI对话 对话内容";
-        }
-        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
-        json body;
-        httplib::Headers headers = {
-            {"Authorization", "Bearer " + AI_KEY},
-            {"Content-Type", "application/json"}
-        };
-        body["model"] = AI_MODEL;
-        body["messages"] = json::array({
-            {
-                {"role", "system"},
-                {"content", AI_SYS_PROMPTS}
-            },
-            {
-                {"role", "user"},
-                {"content", args}
-            }
-        });
-        body["max_tokens"] = AI_MAX_TOKENS;
-        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
-        // 硅基流动 post 请求示例
-        //         curl --request POST \
-        //   --url https://api.siliconflow.cn/v1/chat/completions \
-        //   -H "Content-Type: application/json" \
-        //   -H "Authorization: Bearer YOUR_API_KEY" \
-        //   -d '{
-        //     "model": "Pro/zai-org/GLM-4.7",
-        //     "messages": [
-        //       {"role": "system", "content": "你是一个有用的助手"},
-        //       {"role": "user", "content": "你好，请介绍一下你自己"}
-        //     ]
-        //   }'
-        if(!res)
-        {
-            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
-            return "AI网络请求失败";
-        }
-        if(res->status != 200)
-        {
-            Logger::warn("AI请求 HTTP状态码: ", res->status);
-            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
-            return "AI请求异常";
-        }
-        json raw_data = json::parse(res->body);
-        if (!raw_data.contains("choices") || raw_data["choices"].empty())
-        {
-            Logger::warn("AI回复异常", raw_data.dump(4));
-            return "AI 回复异常";
-        }
-        AIinfo ainfo = getAIinfo(raw_data);
-        std::string reply = "模型: " + ainfo.model; 
-        reply += "\nAI回复内容: " + ainfo.reply;
-        reply += "\n使用 token: " + std::to_string(ainfo.tokens);
-        return reply;
-    }
-public:
-    std::string name() override
-    {
-        return "AI对话";
-    }
-
-    json execute(const std::string& args) override
-    {
-        return MessageManager::buildMsg("text", askAI(args));
-    }
-    ~AICommand() override
-    {
-        return;
-    }
-};
-
 // 随机图片
 class RandomImgCommand : public Command{
 private:
@@ -723,9 +628,9 @@ public:
 
 ///////////////////// 各个任务管理器
 ////////////
-// 被at的文本任务管理器
+// 被at的文本命令任务管理器
 ////////////
-class AtTaskManager : public BaseTaskManager{
+class CmdTaskManager : public BaseTaskManager{
 private: 
     // 维护一个指令表，用于存储多种可支持的指令
     std::unordered_map<std::string, std::unique_ptr<Command>> cmd_map;
@@ -749,12 +654,11 @@ public:
         return cmd_list;
     }
 
-    AtTaskManager()
+    CmdTaskManager()
     {
         // 注册各个指令
         registerCommand(std::make_unique<TimeCommand>());
         registerCommand(std::make_unique<WeatherCommand>());
-        registerCommand(std::make_unique<AICommand>());
         registerCommand(std::make_unique<RandomImgCommand>());
         // 后续文本指令也在此注册
         registerCommand(std::make_unique<HelpCommand>(getCommandList()));
@@ -764,7 +668,18 @@ public:
     bool canHandle(const MessageContext& msgctx) override
     {
         // 仅能处理群聊中被at的消息
-        return msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group");
+        if(!(msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group")))
+        return false;
+        if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
+        // 先按照空格分割指令名称和参数
+        size_t pos = msgctx.pmsgsegs.text.find(' ');
+        std::string cmd_name = msgctx.pmsgsegs.text.substr(0, pos);
+        // 去除可能的前置空格
+        while(!cmd_name.empty() && cmd_name[0] == ' ')
+        {
+            cmd_name.erase(0, 1);
+        }
+        return cmd_map.count(cmd_name); // 仅能处理指令表中存在的指令
     }
 
     // 处理某个被at的文本指令
@@ -790,7 +705,6 @@ public:
         if(cmd_map.count(cmd_name))
         {
             // 调用对应指令
-            result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
             result.emplace_back(cmd_map[cmd_name]->execute(cmd_args));
             return result;
         }
@@ -982,6 +896,106 @@ public:
     }
 };
 
+// AI对话
+class AITaskManager : public BaseTaskManager{
+private:
+    // AI 对话历史结构体
+    struct AIMemCtx{
+        std::string role;
+        std::string content;
+    };
+    static std::unordered_map<std::string, std::vector<AIMemCtx>> chat_memory;
+    static std::mutex chat_mutex;
+    // AI回复信息结构体
+    struct AIinfo{
+        std::string model;
+        std::string reply;
+        int tokens;
+    };
+    // 获取回复信息
+    AIinfo getAIinfo(const json& raw_data)
+    {
+        AIinfo result;
+        result.model = raw_data["model"].get<std::string>();
+        result.reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        result.tokens = raw_data["usage"]["total_tokens"].get<int>();
+        return result;
+    }
+    //与AI交互
+    std::string askAI(const std::string& args)
+    {
+        if(args.empty())
+        {
+            return "请输入对话内容, 例如 AI对话 对话内容";
+        }
+        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
+        json body;
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + AI_KEY},
+            {"Content-Type", "application/json"}
+        };
+        body["model"] = AI_MODEL;
+        body["messages"] = json::array({
+            {
+                {"role", "system"},
+                {"content", AI_SYS_PROMPTS}
+            },
+            {
+                {"role", "user"},
+                {"content", args}
+            }
+        });
+        body["max_tokens"] = AI_MAX_TOKENS;
+        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
+        // 硅基流动 post 请求示例
+        //         curl --request POST \
+        //   --url https://api.siliconflow.cn/v1/chat/completions \
+        //   -H "Content-Type: application/json" \
+        //   -H "Authorization: Bearer YOUR_API_KEY" \
+        //   -d '{
+        //     "model": "Pro/zai-org/GLM-4.7",
+        //     "messages": [
+        //       {"role": "system", "content": "你是一个有用的助手"},
+        //       {"role": "user", "content": "你好，请介绍一下你自己"}
+        //     ]
+        //   }'
+        if(!res)
+        {
+            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
+            return "AI网络请求失败";
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("AI请求 HTTP状态码: ", res->status);
+            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
+            return "AI请求异常";
+        }
+        json raw_data = json::parse(res->body);
+        if (!raw_data.contains("choices") || raw_data["choices"].empty())
+        {
+            Logger::warn("AI回复异常", raw_data.dump(4));
+            return "AI 回复异常";
+        }
+        AIinfo ainfo = getAIinfo(raw_data);
+        std::string reply = "模型: " + ainfo.model; 
+        reply += "\nAI回复内容: " + ainfo.reply;
+        reply += "\n使用 token: " + std::to_string(ainfo.tokens);
+        return reply;
+    }
+public:
+    bool canHandle(const MessageContext& msgctx) override
+    {
+        return msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group");
+    }    
+
+    json handleTask(const MessageContext& msgctx) override
+    {
+        return MessageManager::buildMsg("text", askAI(msgctx.pmsgsegs.text));
+    }
+};
+
+
+
 //////////////
 // 总的任务管理器
 //////////////
@@ -997,7 +1011,8 @@ public:
     TaskManager()
     {
         // 注册特定任务管理器
-        registerTaskManager(std::make_unique<AtTaskManager>());
+        registerTaskManager(std::make_unique<CmdTaskManager>());
+        registerTaskManager(std::make_unique<AITaskManager>()); // 注意这里AI任务优先级低于命令任务
         registerTaskManager(std::make_unique<JsonTaskManager>());
     }
     // 总的任务处理函数
