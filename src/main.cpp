@@ -8,7 +8,9 @@
 #include <regex>
 #include <filesystem>
 #include <fstream>
-#include <unistd.h>  
+#include <unistd.h>
+#include <shared_mutex>  
+#include <mutex>         
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include "httplib.h"
@@ -925,7 +927,7 @@ private:
     // 每个 session 对话历史保存
     static std::unordered_map<std::string, std::vector<SessionMemCtx>> session_memory;
     // 会话历史全局锁
-    static std::mutex session_memory_global_lock;
+    static std::shared_mutex session_memory_global_lock;
     // 针对每个 session 的锁表
     static std::unordered_map<std::string, std::shared_ptr<std::mutex>> session_mutex_map;
     static std::mutex session_mutex_map_lock;
@@ -962,20 +964,33 @@ private:
     std::vector<SessionMemCtx> getGroupSessionHistory(const std::string& group_id)
     {
         std::vector<SessionMemCtx> result = {};
-        std::lock_guard<std::mutex> lock(session_memory_global_lock);
+        std::vector<std::string> session_ids;
+        // 加上读锁
+        std::shared_lock<std::shared_mutex> rlock(session_memory_global_lock);
         for(auto& session : session_memory)
         {
             const std::string& session_id = session.first;
+            session_ids.push_back(session_id);
+        }
+        rlock.unlock(); // 释放读锁
+        for(auto& session_id : session_ids)
+        {
             size_t pos = session_id.find(group_id);
             if(pos != std::string::npos)
             {
                 // 上锁
                 std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
                 std::lock_guard<std::mutex> session_lock(*session_mutex);
-                result.insert(result.end(), session.second.begin(), session.second.end());
+                result.insert(result.end(), session_memory[session_id].begin(), session_memory[session_id].end());
             }
         }
         return result;
+    }
+    // 检查某个 session_id 是否记录在 session_memory
+    bool isSessionExit(const std::string& session_id)
+    {
+        // 这里不上锁避免死锁
+        return session_memory.count(session_id);
     }
     // 更新会话历史
     bool UpdateSessionMemory(const std::string& session_id, const std::string& user_input, const std::string& ai_reply)
@@ -986,18 +1001,22 @@ private:
         mem1.content = user_input;
         mem2.role = "assistant";
         mem2.content = ai_reply;
+        // 先上一个session_memory的全局写锁
+        std::unique_lock<std::shared_mutex> wlock(session_memory_global_lock);
+        if(isSessionExit(session_id))
+        {   // 如果已经存在则解全局锁
+            wlock.unlock();
+        }
         // 先上锁
         std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
         std::lock_guard<std::mutex> session_lock(*session_mutex);
         session_memory[session_id].emplace_back(mem1);
         session_memory[session_id].emplace_back(mem2);
         // 如果历史过多则清理历史并设置返回标志来更新用户画像
-        if(session_memory[session_id].size() > MAX_CHAT_HISTORY)
+        if(session_memory[session_id].size() > MAX_CHAT_HISTORY * 2) // 每轮两条对话
         {
             session_memory[session_id].erase(session_memory[session_id].begin(), session_memory[session_id].begin()+2);
         }
-        std::lock_guard<std::mutex> lock(session_round_counter_mutex);
-        session_round_counter[session_id]++;
         return true;
     }
 
@@ -1214,10 +1233,6 @@ private:
         users_profile_map[group_id][user_id].description = des;
         users_profile_map[group_id][user_id].card = raw_data2["data"]["card"];
         users_profile_map[group_id][user_id].nickname = raw_data2["data"]["nickname"];
-        // 上锁
-        std::lock_guard<std::mutex> lock(session_round_counter_mutex);
-        // 重置记录的轮数
-        session_round_counter[session_id] = 0;
         return true;
     }
 
@@ -1254,7 +1269,7 @@ private:
         // 加入bot人格
         messages.push_back({
             {"role", "system"},
-            {"content", "<2>接下来输入你的群聊习得人格"}
+            {"content", "<2>接下来输入你的<群聊习得人格>"}
         });
         messages.push_back({
             {"role","system"},
@@ -1263,7 +1278,7 @@ private:
         // 加入群聊用户画像
         messages.push_back({
             {"role", "system"},
-            {"content", "<3>接下来输入一系列用户画像, 格式为 id_xxx_nickname_xxx_des_xxx , 分别对应用户id、昵称和描述"}
+            {"content", "<3>接下来输入一系列用户画像, 格式为 id_xxx_nickname_xxx_des_xxx , 三个xxx分别对应用户id、昵称和描述"}
         });
         for(auto& user : users)
         {
@@ -1331,19 +1346,34 @@ private:
         Logger::info("获取ai回复成功, 长度: ", ai_reply.length()); 
         if(UpdateSessionMemory(session_id, user_input, ai_reply))
         {
+            // 上锁，更新轮数
+            std::lock_guard<std::mutex> lock(session_round_counter_mutex);
+            session_round_counter[session_id]++;
             Logger::info("更新对应 session 对话历史成功, 轮数: ", session_round_counter[session_id]);
             if(session_round_counter[session_id] == MAX_CHAT_HISTORY)
             {
                 if(!UpdateUserProfile(session_id, msgctx.user_id, msgctx.group_id))
+                {
                     Logger::warn("更新用户画像失败, session_id: ", session_id);
+                }else{
+                    // 重置记录的轮数
+                    session_round_counter[session_id] = 0;
+                    Logger::info("用户画像已更新, 对应 session 轮数已重置, session_id: ", session_id);
+                }
             }
         }
         std::lock_guard<std::mutex> group_round_lock(group_round_counter_mutex);
         group_round_counter[msgctx.group_id]++;
-        if(group_round_counter[msgctx.group_id] >= 3*MAX_CHAT_HISTORY)
+        Logger::info("当前群聊轮数: ", group_round_counter[msgctx.group_id]);
+        if(group_round_counter[msgctx.group_id] >= MAX_CHAT_HISTORY)
         {
             if(!UpdateBotPersona(msgctx.group_id))
+            {
                 Logger::warn("更新bot群聊人格失败, group_id: ", msgctx.group_id);
+            }else{
+                group_round_counter[msgctx.group_id] = 0;
+                Logger::info("更新bot群聊人格成功, 群聊轮数已重置, group_id: ", msgctx.group_id);
+            }
         }
         return ai_reply;
     }
@@ -1364,7 +1394,7 @@ public:
 std::unordered_map<std::string, std::vector<ChatTaskManager::SessionMemCtx>> ChatTaskManager::session_memory;
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::session_mutex_map;
 std::mutex ChatTaskManager::session_mutex_map_lock;
-std::mutex ChatTaskManager::session_memory_global_lock;
+std::shared_mutex ChatTaskManager::session_memory_global_lock;
 
 std::unordered_map<std::string, std::string> ChatTaskManager::persona_map;
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::persona_mutex_map;
