@@ -682,24 +682,17 @@ public:
     bool canHandle(const MessageContext& msgctx) override
     {
         // 仅能处理群聊中被at的消息
-        if(!(msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group")))
-        return false;
-        if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
-        // 先按照空格分割指令名称和参数
+        if(!(msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group"))) return false;
+        if(msgctx.pmsgsegs.text.empty()) return false;
+        // 先按照空格分割指令名称和参数（解释text时已经去除了前置空格）
         size_t pos = msgctx.pmsgsegs.text.find(' ');
         std::string cmd_name = msgctx.pmsgsegs.text.substr(0, pos);
-        // 去除可能的前置空格
-        while(!cmd_name.empty() && cmd_name[0] == ' ')
-        {
-            cmd_name.erase(0, 1);
-        }
         return cmd_map.count(cmd_name); // 仅能处理指令表中存在的指令
     }
 
     // 处理某个被at的文本指令
     json handleTask(const MessageContext& msgctx) override
     {
-        if(msgctx.pmsgsegs.text.empty()) return "指令格式: @我 指令\n先试试 帮助 吧";
         // 执行指令
         // 先按照空格分割指令名称和参数
         size_t pos = msgctx.pmsgsegs.text.find(' ');
@@ -1236,15 +1229,11 @@ private:
         return true;
     }
 
-    //与AI交互
-    std::string askAI(const MessageContext& msgctx)
+    //与chatAI交互
+    std::string ChatWithAI(const MessageContext& msgctx)
     {
         const std::string& user_input = msgctx.pmsgsegs.text;
         const std::string session_id = getSessionId(msgctx);
-        if(user_input.empty())
-        {
-            return "请输入对话内容";
-        }
         httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
         json body;
         httplib::Headers headers = {
@@ -1377,6 +1366,40 @@ private:
         }
         return ai_reply;
     }
+    // 单纯的与纯净模型交互
+    std::string askAI(const std::string& user_input)
+    {
+        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
+        json body;
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + AI_KEY},
+            {"Content-Type", "application/json"}
+        };
+        json messages = json::array();
+        messages["roles"] = "user";
+        messages["content"] = user_input;
+        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
+        if(!res)
+        {
+            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
+            return "AI网络请求失败";
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("AI请求 HTTP状态码: ", res->status);
+            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
+            return "AI请求异常";
+        }
+        json raw_data = json::parse(res->body);
+        if (!raw_data.contains("choices") || raw_data["choices"].empty())
+        {
+            Logger::warn("AI回复异常", raw_data.dump(4));
+            return "AI 回复异常";
+        }
+        std::string ai_reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        Logger::info("获取ai回复成功, 长度: ", ai_reply.length());
+        return ai_reply;
+    }
 public:
     bool canHandle(const MessageContext& msgctx) override
     {
@@ -1387,7 +1410,17 @@ public:
     {
         json result = json::array();
         result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
-        result.emplace_back(MessageManager::buildMsg("text", askAI(msgctx)));
+        if(msgctx.pmsgsegs.text.empty())
+        {
+            result.emplace_back(MessageManager::buildMsg("text", "请输入对话内容, 以/起始的对话内容由无上下文AI直接处理, 输入 帮助 可查看命令列表"));
+            return result;
+        }
+        if(msgctx.pmsgsegs.text[0] == '/')
+        {
+            result.emplace_back(MessageManager::buildMsg("text", askAI(msgctx.pmsgsegs.text.substr(1))));
+        }else{
+            result.emplace_back(MessageManager::buildMsg("text", ChatWithAI(msgctx)));
+        }
         return result;
     }
 };
