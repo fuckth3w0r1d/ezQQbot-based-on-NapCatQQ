@@ -1104,11 +1104,38 @@ private:
         return users_profile_mutex_map[group_id];
     }
     // 获取或创建群聊用户画像
-    std::unordered_map<std::string, UserProfile> getUsersProfile(const std::string& group_id)
+    std::unordered_map<std::string, UserProfile> getUsersProfile(const std::string& group_id, const std::string& user_id)
     {
         // 上锁
         std::shared_ptr<std::mutex> users_profile_mutex = getUsersProMutex(group_id);
         std::lock_guard<std::mutex> users_profile_lock(*users_profile_mutex);
+        if(users_profile_map[group_id].count(user_id) == 0)
+        {
+            // 第一次见到该用户, 同时更新昵称和群昵称
+            httplib::Client cli(SERVER_HOST, SERVER_PORT);
+            httplib::Headers headers = {
+                {"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}
+            };
+            json body;
+            body["group_id"] = group_id;
+            body["user_id"] = user_id;
+            auto res = cli.Post("/get_group_member_info", headers, body.dump(), "application/json");
+            if(!res)
+            {
+                Logger::error("获取群聊成员信息请求失败", httplib::to_string(res.error()));
+                return {};
+            }
+            if(res->status != 200)
+            {
+                Logger::warn("获取群聊成员信息请求 HTTP状态码: ", res->status);
+                Logger::error("获取群聊成员信息请求 异常响应体:", json::parse(res->body).dump(4));
+                return {};
+            }
+            json raw_data = json::parse(res->body);
+            // 更新画像
+            users_profile_map[group_id][user_id].card = raw_data["data"]["card"];
+            users_profile_map[group_id][user_id].nickname = raw_data["data"]["nickname"];
+        }
         return users_profile_map[group_id];
     }
     // 更新群聊用户画像
@@ -1216,7 +1243,7 @@ private:
         std::string persona = getBotPersona(msgctx.group_id);
         Logger::info("获取bot人格成功", "");
         // 获取或创建群聊用户画像
-        std::unordered_map<std::string, UserProfile> users = getUsersProfile(msgctx.group_id);
+        std::unordered_map<std::string, UserProfile> users = getUsersProfile(msgctx.group_id, msgctx.user_id);
         Logger::info("获取群聊用户画像成功, 画像人数: ", users.size());
         json messages = json::array();
         // 加入系统提示词
