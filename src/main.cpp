@@ -1376,8 +1376,18 @@ private:
             {"Content-Type", "application/json"}
         };
         json messages = json::array();
-        messages["roles"] = "user";
-        messages["content"] = user_input;
+        messages.push_back({
+            {"role", "system"},
+            {"content", "You are a helpful assistant."}
+        });
+        messages.push_back({
+            {"role", "user"},
+            {"content", user_input}
+        });
+        // 构造请求体
+        body["model"] = AI_MODEL;
+        body["messages"] = messages;
+        body["max_tokens"] = AI_MAX_TOKENS;
         auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
         if(!res)
         {
