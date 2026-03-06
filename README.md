@@ -26,7 +26,7 @@
 - 编译命令
 
   ```shell
-  g++ src/main.cpp -O2 -Iinclude -o bot -lssl -lcrypto -lpthread
+  g++ src/main.cpp -O2 -Iinclude -o release/bot -lssl -lcrypto -lpthread
   ```
 
 ### 主要特性

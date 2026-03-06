@@ -1474,4 +1474,4 @@ int main()
     m.start();
     return 0;
 }
-// g++ src/main.cpp -O2 -Iinclude -o bot -lssl -lcrypto -lpthread
+// g++ src/main.cpp -O2 -Iinclude -o release/bot -lssl -lcrypto -lpthread
