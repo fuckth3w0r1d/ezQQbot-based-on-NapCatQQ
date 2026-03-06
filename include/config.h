@@ -113,9 +113,9 @@ public:
         return data["ai"]["max_tokens"].get<const int>();
     }
 
-    const int getMaxChatHistory()
+    const size_t getMaxChatHistory()
     {
-        return data["ai"]["max_history"].get<const int>();
+        return data["ai"]["max_history"].get<const size_t>();
     }
 
     const std::string getB23Appid()

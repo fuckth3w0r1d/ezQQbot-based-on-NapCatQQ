@@ -44,7 +44,7 @@ const std::string AI_POST_PATH = cfg.getAIPostPath();
 const std::string AI_MODEL = cfg.getAIModel();
 const std::string AI_DEFAULT_SYS_PROMPTS = cfg.getAISysPrompts();
 const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
-const int MAX_CHAT_HISTORY = cfg.getMaxChatHistory();
+const size_t MAX_CHAT_HISTORY = cfg.getMaxChatHistory();
 // bilibili
 const std::string B23_APP_ID = cfg.getB23Appid();
 const std::string B23_CLIENT_HOST = cfg.getB23Host();
@@ -911,17 +911,24 @@ public:
 // AI对话任务
 class ChatTaskManager : public BaseTaskManager{
 private:
-    // AI 对话历史结构体
-    struct ChatMemCtx{
+    // 记录每个 session 对话轮数
+    static std::unordered_map<std::string, size_t> session_round_counter;
+    static std::mutex session_round_counter_mutex;
+    // 记录每个群聊对话轮数
+    static std::unordered_map<std::string, size_t> group_round_counter;
+    static std::mutex group_round_counter_mutex;
+    // AI 会话历史结构体
+    struct SessionMemCtx{
         std::string role;
         std::string content;
     };
-    // 对话历史保存
-    static std::unordered_map<std::string, std::vector<ChatMemCtx>> chat_memory;
-    // 对话历史表锁表
-    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> chat_mutex_map;
-    // 保护对话历史表锁表的锁
-    static std::mutex chat_mutex_map_lock;
+    // 每个 session 对话历史保存
+    static std::unordered_map<std::string, std::vector<SessionMemCtx>> session_memory;
+    // 会话历史全局锁
+    static std::mutex session_memory_global_lock;
+    // 针对每个 session 的锁表
+    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> session_mutex_map;
+    static std::mutex session_mutex_map_lock;
     // 获取对话 session id
     std::string getSessionId(const MessageContext& msgctx)
     {
@@ -936,26 +943,45 @@ private:
     // 获取或者创建 session 对应的锁
     std::shared_ptr<std::mutex> getSessionMutex(const std::string& session_id)
     {
-        std::lock_guard<std::mutex> lock(chat_mutex_map_lock);
-        if(chat_mutex_map.find(session_id) == chat_mutex_map.end())
+        std::lock_guard<std::mutex> lock(session_mutex_map_lock);
+        if(session_mutex_map.find(session_id) == session_mutex_map.end())
         {
-            chat_mutex_map[session_id] = std::make_shared<std::mutex>();
+            session_mutex_map[session_id] = std::make_shared<std::mutex>();
         }
-        return chat_mutex_map[session_id];
+        return session_mutex_map[session_id];
     }
     // 获取或者创建 session 对应的对话历史
-    std::vector<ChatMemCtx> getSessionHistory(const std::string& session_id)
+    std::vector<SessionMemCtx> getSessionHistory(const std::string& session_id)
     {
         // 上锁
         std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
         std::lock_guard<std::mutex> session_lock(*session_mutex);
-        return chat_memory[session_id];
+        return session_memory[session_id];
     }
-    // 更新对话历史
-    void UpdateChatMemory(const std::string& session_id, const std::string& user_input, const std::string& ai_reply)
+    // 获取某个群聊内所有留存的对话历史
+    std::vector<SessionMemCtx> getGroupSessionHistory(const std::string& group_id)
     {
-        ChatMemCtx mem1;
-        ChatMemCtx mem2;
+        std::vector<SessionMemCtx> result = {};
+        std::lock_guard<std::mutex> lock(session_memory_global_lock);
+        for(auto& session : session_memory)
+        {
+            const std::string& session_id = session.first;
+            size_t pos = session_id.find(group_id);
+            if(pos != std::string::npos)
+            {
+                // 上锁
+                std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
+                std::lock_guard<std::mutex> session_lock(*session_mutex);
+                result.insert(result.end(), session.second.begin(), session.second.end());
+            }
+        }
+        return result;
+    }
+    // 更新会话历史
+    bool UpdateSessionMemory(const std::string& session_id, const std::string& user_input, const std::string& ai_reply)
+    {
+        SessionMemCtx mem1;
+        SessionMemCtx mem2;
         mem1.role = "user";
         mem1.content = user_input;
         mem2.role = "assistant";
@@ -963,17 +989,192 @@ private:
         // 先上锁
         std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
         std::lock_guard<std::mutex> session_lock(*session_mutex);
-        chat_memory[session_id].emplace_back(mem1);
-        chat_memory[session_id].emplace_back(mem2);
-        // 如果历史过多则清理历史
-        if(chat_memory[session_id].size() > MAX_CHAT_HISTORY)
+        session_memory[session_id].emplace_back(mem1);
+        session_memory[session_id].emplace_back(mem2);
+        // 如果历史过多则清理历史并设置返回标志来更新用户画像
+        if(session_memory[session_id].size() > MAX_CHAT_HISTORY)
         {
-            chat_memory[session_id].erase(chat_memory[session_id].begin(), chat_memory[session_id].begin()+2);
+            session_memory[session_id].erase(session_memory[session_id].begin(), session_memory[session_id].begin()+2);
         }
+        std::lock_guard<std::mutex> lock(session_round_counter_mutex);
+        session_round_counter[session_id]++;
+        return true;
     }
-    //与AI交互
-    std::string askAI(const std::string& session_id, const std::string& user_input)
+
+    // bot 的人格记忆
+    std::string learned_persona;  // 用户影响产生的人格
+    // 不同群聊的人格记忆隔离, 用一个表记录
+    static std::unordered_map<std::string, std::string> persona_map;
+    // 锁表
+    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> persona_mutex_map;
+    static std::mutex persona_mutex_map_lock;
+    // 获取或者创建群聊人格对应的锁
+    std::shared_ptr<std::mutex> getPersonaMutex(const std::string& group_id)
     {
+        std::lock_guard<std::mutex> lock(persona_mutex_map_lock);
+        if(persona_mutex_map.find(group_id) == persona_mutex_map.end())
+        {
+            persona_mutex_map[group_id] = std::make_shared<std::mutex>();
+        }
+        return persona_mutex_map[group_id];
+    }
+    // 获取或者创建对应群聊的人格记忆
+    std::string getBotPersona(const std::string& group_id)
+    {
+        // 上锁
+        std::shared_ptr<std::mutex> persona_mutex = getPersonaMutex(group_id);
+        std::lock_guard<std::mutex> persona_lock(*persona_mutex);
+        return persona_map[group_id];
+    }
+    // 更新对应群聊的人格记忆
+    bool UpdateBotPersona(const std::string& group_id)
+    {
+        // 让 AI 更新群聊人格记忆
+        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
+        json body;
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + AI_KEY},
+            {"Content-Type", "application/json"}
+        };
+        json messages = json::array();
+        messages.push_back({
+            {"role", "system"},
+            {"content", "<1>以下是你目前的人格" + getBotPersona(group_id) + "<2>接下来输入一系列某个群聊内用户和bot的对话历史, 请融合并生成新的100字人格"}
+        });
+        // 获取群聊的留存对话历史
+        std::vector<SessionMemCtx> history = getGroupSessionHistory(group_id);
+        // 输入对话历史
+        for(auto& msg : history)
+        {
+            messages.push_back({
+                {"role", msg.role},
+                {"content", msg.content}
+            });
+        }
+        // 构造请求体
+        body["model"] = AI_MODEL;
+        body["messages"] = messages;
+        body["max_tokens"] = AI_MAX_TOKENS;
+        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
+        if(!res)
+        {
+            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
+            return false;
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("AI请求 HTTP状态码: ", res->status);
+            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
+            return false;
+        }
+        json raw_data = json::parse(res->body);
+        if (!raw_data.contains("choices") || raw_data["choices"].empty())
+        {
+            Logger::warn("AI回复异常", raw_data.dump(4));
+            return false;
+        }
+        std::string new_persona = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        // 上锁
+        std::shared_ptr<std::mutex> persona_mutex = getPersonaMutex(group_id);
+        std::lock_guard<std::mutex> persona_lock(*persona_mutex);
+        // 更新bot记忆
+        persona_map[group_id] = new_persona;
+        return true;
+    }
+
+    // 给对话过的用户画像
+    struct UserProfile{
+        std::string nickname;
+        std::string description;   // AI总结的人设
+    };
+    // 不同群聊用户画像的记录
+    static std::unordered_map<std::string, std::unordered_map<std::string, UserProfile>> users_profile_map;
+    // 群聊用户画像总的锁表
+    static std::unordered_map<std::string, std::shared_ptr<std::mutex>> users_profile_mutex_map;
+    static std::mutex users_profile_mutex_map_lock;
+    // 获取或创建群聊用户画像锁
+    std::shared_ptr<std::mutex> getUsersProMutex(const std::string& group_id)
+    {
+        std::lock_guard<std::mutex> lock(users_profile_mutex_map_lock);
+        if(users_profile_mutex_map.find(group_id) == users_profile_mutex_map.end())
+        {
+            users_profile_mutex_map[group_id] = std::make_shared<std::mutex>();
+        }
+        return users_profile_mutex_map[group_id];
+    }
+    // 获取或创建群聊用户画像
+    std::unordered_map<std::string, UserProfile> getUsersProfile(const std::string& group_id)
+    {
+        // 上锁
+        std::shared_ptr<std::mutex> users_profile_mutex = getUsersProMutex(group_id);
+        std::lock_guard<std::mutex> users_profile_lock(*users_profile_mutex);
+        return users_profile_map[group_id];
+    }
+    // 更新群聊用户画像
+    bool UpdateUserProfile(const std::string& session_id, const std::string& user_id, const std::string& group_id)
+    {
+        // 让 AI 总结用户画像
+        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
+        json body;
+        httplib::Headers headers = {
+            {"Authorization", "Bearer " + AI_KEY},
+            {"Content-Type", "application/json"}
+        };
+        json messages = json::array();
+        messages.push_back({
+            {"role", "system"},
+            {"content", "接下来输入一系列某个用户的对话历史, 请你返回50字左右的简要用户画像描述"}
+        });
+        // 获取对话历史
+        std::vector<SessionMemCtx> history = getSessionHistory(session_id);
+        // 输入对话历史
+        for(auto& msg : history)
+        {
+            messages.push_back({
+                {"role", msg.role},
+                {"content", msg.content}
+            });
+        }
+        // 构造请求体
+        body["model"] = AI_MODEL;
+        body["messages"] = messages;
+        body["max_tokens"] = AI_MAX_TOKENS;
+        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
+        if(!res)
+        {
+            Logger::error("AI网络请求失败", httplib::to_string(res.error()));
+            return false;
+        }
+        if(res->status != 200)
+        {
+            Logger::warn("AI请求 HTTP状态码: ", res->status);
+            Logger::error("AI请求 异常响应体:", json::parse(res->body).dump(4));
+            return false;
+        }
+        json raw_data = json::parse(res->body);
+        if (!raw_data.contains("choices") || raw_data["choices"].empty())
+        {
+            Logger::warn("AI回复异常", raw_data.dump(4));
+            return false;
+        }
+        std::string des = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        // 上锁
+        std::shared_ptr<std::mutex> users_profile_mutex = getUsersProMutex(group_id);
+        std::lock_guard<std::mutex> users_profile_lock(*users_profile_mutex);
+        // 更新画像
+        users_profile_map[group_id][user_id].description = des;
+        // 上锁
+        std::lock_guard<std::mutex> lock(session_round_counter_mutex);
+        // 重置记录的轮数
+        session_round_counter[session_id] = 0;
+        return true;
+    }
+
+    //与AI交互
+    std::string askAI(const MessageContext& msgctx)
+    {
+        const std::string& user_input = msgctx.pmsgsegs.text;
+        const std::string session_id = getSessionId(msgctx);
         if(user_input.empty())
         {
             return "请输入对话内容";
@@ -985,15 +1186,46 @@ private:
             {"Content-Type", "application/json"}
         };
         // 获取或者创建对话历史
-        auto history = getSessionHistory(session_id);
+        std::vector<SessionMemCtx> history = getSessionHistory(session_id);
         Logger::info("获取对话历史成功, 轮数: ", history.size()/2);
+        // 获取或者创建bot人格
+        std::string persona = getBotPersona(msgctx.group_id);
+        Logger::info("获取bot人格成功", "");
+        // 获取或创建群聊用户画像
+        std::unordered_map<std::string, UserProfile> users = getUsersProfile(msgctx.group_id);
+        Logger::info("获取群聊用户画像成功, 画像人数: ", users.size());
         json messages = json::array();
         // 加入系统提示词
         messages.push_back({
-            {"role","system"},
-            {"content",AI_DEFAULT_SYS_PROMPTS}
+            {"role", "system"},
+            {"content", "<1>" + AI_DEFAULT_SYS_PROMPTS}
         });
+        // 加入bot人格
+        messages.push_back({
+            {"role", "system"},
+            {"content", "<2>接下来输入你的群聊习得人格"}
+        });
+        messages.push_back({
+            {"role","system"},
+            {"content", persona}
+        });
+        // 加入群聊用户画像
+        messages.push_back({
+            {"role", "system"},
+            {"content", "<3>接下来输入一系列用户画像, 格式为 id_xxx_nickname_xxx_des_xxx , 分别对应用户id、昵称和描述"}
+        });
+        for(auto& user : users)
+        {
+            messages.push_back({
+                {"role", "system"},
+                {"content", "id_" + user.first + "_nickname_" + user.second.nickname + "_des_" + user.second.description}
+            });
+        }
         // 加入对话历史
+        messages.push_back({
+            {"role", "system"},
+            {"content", "<4>接下来输入你和用户id: " + msgctx.user_id + "的对话历史"}
+        });
         for(auto& msg : history)
         {
             messages.push_back({
@@ -1002,6 +1234,10 @@ private:
             });
         }
         // 加入用户输入
+        messages.push_back({
+            {"role", "system"},
+            {"content", "<5>接下来输入用户id: " + msgctx.user_id + "的新提问内容"} 
+        });
         messages.push_back({
             {"role", "user"},
             {"content", user_input}
@@ -1042,8 +1278,22 @@ private:
         }
         std::string ai_reply = raw_data["choices"][0]["message"]["content"].get<std::string>();
         Logger::info("获取ai回复成功, 长度: ", ai_reply.length()); 
-        UpdateChatMemory(session_id, user_input, ai_reply);
-        Logger::info("更新对应 session 对话历史成功, 轮数: ", chat_memory[session_id].size()/2);
+        if(UpdateSessionMemory(session_id, user_input, ai_reply))
+        {
+            Logger::info("更新对应 session 对话历史成功, 轮数: ", session_round_counter[session_id]);
+            if(session_round_counter[session_id] == MAX_CHAT_HISTORY)
+            {
+                if(!UpdateUserProfile(session_id, msgctx.user_id, msgctx.group_id))
+                    Logger::warn("更新用户画像失败, session_id: ", session_id);
+            }
+        }
+        std::lock_guard<std::mutex> group_round_lock(group_round_counter_mutex);
+        group_round_counter[msgctx.group_id]++;
+        if(group_round_counter[msgctx.group_id] >= 3*MAX_CHAT_HISTORY)
+        {
+            if(!UpdateBotPersona(msgctx.group_id))
+                Logger::warn("更新bot群聊人格失败, group_id: ", msgctx.group_id);
+        }
         return ai_reply;
     }
 public:
@@ -1054,18 +1304,29 @@ public:
 
     json handleTask(const MessageContext& msgctx) override
     {
-        std::string session_id = getSessionId(msgctx);
-        std::string user_input = msgctx.pmsgsegs.text;
         json result = json::array();
         result.emplace_back(MessageManager::buildMsg("at", msgctx.user_id));
-        result.emplace_back(MessageManager::buildMsg("text", askAI(session_id, user_input)));
+        result.emplace_back(MessageManager::buildMsg("text", askAI(msgctx)));
         return result;
     }
 };
-std::unordered_map<std::string, std::vector<ChatTaskManager::ChatMemCtx>> ChatTaskManager::chat_memory;
-std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::chat_mutex_map;
-std::mutex ChatTaskManager::chat_mutex_map_lock;
+std::unordered_map<std::string, std::vector<ChatTaskManager::SessionMemCtx>> ChatTaskManager::session_memory;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::session_mutex_map;
+std::mutex ChatTaskManager::session_mutex_map_lock;
+std::mutex ChatTaskManager::session_memory_global_lock;
 
+std::unordered_map<std::string, std::string> ChatTaskManager::persona_map;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::persona_mutex_map;
+std::mutex ChatTaskManager::persona_mutex_map_lock;
+
+std::unordered_map<std::string, std::unordered_map<std::string, ChatTaskManager::UserProfile>> ChatTaskManager::users_profile_map;
+std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::users_profile_mutex_map;
+std::mutex ChatTaskManager::users_profile_mutex_map_lock;
+
+std::unordered_map<std::string, size_t> ChatTaskManager::session_round_counter;
+std::mutex ChatTaskManager::session_round_counter_mutex;
+std::unordered_map<std::string, size_t> ChatTaskManager::group_round_counter;
+std::mutex ChatTaskManager::group_round_counter_mutex;
 
 //////////////
 // 总的任务管理器
