@@ -1253,7 +1253,7 @@ private:
         };
         // 获取或者创建对话历史
         std::vector<SessionMemCtx> history = getSessionHistory(session_id);
-        Logger::info("获取对话历史成功, 轮数: ", history.size()/2);
+        Logger::info("获取对应 session 对话历史成功, 轮数: ", history.size()/2);
         // 获取或者创建bot人格
         std::string persona = getBotPersona(msgctx.group_id);
         Logger::info("获取bot人格成功", "");
