@@ -1084,7 +1084,8 @@ private:
 
     // 给对话过的用户画像
     struct UserProfile{
-        std::string nickname;
+        std::string nickname; // 昵称
+        std::string card; // 群昵称
         std::string description;   // AI总结的人设
     };
     // 不同群聊用户画像的记录
@@ -1123,7 +1124,7 @@ private:
         json messages = json::array();
         messages.push_back({
             {"role", "system"},
-            {"content", "接下来输入一系列某个用户的对话历史, 请你返回50字左右的简要用户画像描述"}
+            {"content", "接下来输入一系列某个用户的对话历史, 请你返回50字的简要用户画像描述"}
         });
         // 获取对话历史
         std::vector<SessionMemCtx> history = getSessionHistory(session_id);
@@ -1158,11 +1159,34 @@ private:
             return false;
         }
         std::string des = raw_data["choices"][0]["message"]["content"].get<std::string>();
+        // 同时更新昵称和群昵称
+        httplib::Client cli2(SERVER_HOST, SERVER_PORT);
+        httplib::Headers headers2 = {
+            {"Authorization", "Bearer " + SERVER_ACCESS_TOKEN}
+        };
+        json body2;
+        body2["group_id"] = group_id;
+        body2["user_id"] = user_id;
+        auto res2 = cli2.Post("/get_group_member_info", headers2, body2.dump(), "application/json");
+        if(!res2)
+        {
+            Logger::error("获取群聊成员信息请求失败", httplib::to_string(res2.error()));
+            return false;
+        }
+        if(res2->status != 200)
+        {
+            Logger::warn("获取群聊成员信息请求 HTTP状态码: ", res2->status);
+            Logger::error("获取群聊成员信息请求 异常响应体:", json::parse(res2->body).dump(4));
+            return false;
+        }
+        json raw_data2 = json::parse(res2->body);
         // 上锁
         std::shared_ptr<std::mutex> users_profile_mutex = getUsersProMutex(group_id);
         std::lock_guard<std::mutex> users_profile_lock(*users_profile_mutex);
         // 更新画像
         users_profile_map[group_id][user_id].description = des;
+        users_profile_map[group_id][user_id].card = raw_data2["data"]["card"];
+        users_profile_map[group_id][user_id].nickname = raw_data2["data"]["nickname"];
         // 上锁
         std::lock_guard<std::mutex> lock(session_round_counter_mutex);
         // 重置记录的轮数
