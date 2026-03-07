@@ -46,7 +46,7 @@ const std::string AI_POST_PATH = cfg.getAIPostPath();
 const std::string AI_MODEL = cfg.getAIModel();
 const std::string AI_DEFAULT_SYS_PROMPTS = cfg.getAISysPrompts();
 const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
-const size_t MAX_CHAT_HISTORY = cfg.getMaxChatHistory();
+const size_t MAX_CHAT_ROUNDS = cfg.getMaxChatRounds();
 // bilibili
 const std::string B23_APP_ID = cfg.getB23Appid();
 const std::string B23_CLIENT_HOST = cfg.getB23Host();
@@ -55,10 +55,11 @@ const std::string B23_QUERY_PATH = cfg.getB23GetQueryPath();
 const std::string B23_PLAY_PATH = cfg.getB23GetPlayPath();
 // 本地文件缓存或数据
 const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
-const std::filesystem::path CACHE_PATH = cfg.getCachePath();
-const std::filesystem::path DATA_PATH = cfg.getDataPath();
+const std::string CACHE_PATH = cfg.getCachePath();
+const std::string DATA_PATH = cfg.getDataPath();
 const size_t DOWNLOAD_BUFFER_SIZE = cfg.getDownloadBufferSize();
 const size_t CACHE_FILE_LIMIT = cfg.getCacheFileLimit();
+const size_t SAVE_FREQUENCY = cfg.getSaveFrequency();
 // 随机图片
 const std::string IMG_CLIENT_HOST = cfg.getRandomImgHost();
 const int IMG_CLIENT_PORT = cfg.getRandomImgPort();
@@ -451,7 +452,13 @@ public:
             Logger::error("JSON 文件读取时打开失败", path);
             return false;
         }
-        data = json::parse(ifs);
+        try
+        {
+            data = json::parse(ifs);
+        }catch(const json::parse_error& e){
+            Logger::warn("JSON 文件为空或格式错误", path);
+            data = json::object();  // 返回空json
+        }
         return true;
     }
 };
@@ -955,10 +962,74 @@ class ChatTaskManager : public BaseTaskManager{
 private:
     // 记录每个 session 对话轮数
     static std::unordered_map<std::string, size_t> session_round_counter;
-    static std::mutex session_round_counter_mutex;
+    static std::shared_mutex session_round_counter_mutex;
     // 记录每个群聊对话轮数
     static std::unordered_map<std::string, size_t> group_round_counter;
-    static std::mutex group_round_counter_mutex;
+    static std::shared_mutex group_round_counter_mutex;
+    // 保存 session 对话轮数到数据文件
+    bool saveSessionRoundCounter()
+    {
+        json data;
+        std::shared_lock<std::shared_mutex> rlock(session_round_counter_mutex);
+        data["session_round_counter"] = session_round_counter;
+        return FileManager::writeJsonFile(DATA_PATH + "/AiModule/session_round_counter.json", data);
+    }
+    // 加载 session 对话轮数
+    bool loadSessionRoundCounter()
+    {
+        json data;
+        if(FileManager::readJsonFile(DATA_PATH + "/AiModule/session_round_counter.json", data))
+        {
+            if(data.empty())
+            {
+                Logger::warn("从数据文件中加载会话轮数时文件为空: ", DATA_PATH + "/AiModule/session_round_counter.json");
+                return true;
+            }
+            if(!data.contains("session_round_counter"))
+            {
+                Logger::warn("从数据文件中加载会话轮数时文件异常: ", DATA_PATH + "/AiModule/session_round_counter.json");
+                return false;
+            }
+            std::lock_guard<std::shared_mutex> lock(session_round_counter_mutex);
+            session_round_counter.clear();
+            session_round_counter = data["session_round_counter"].get<std::unordered_map<std::string, size_t>>();
+            return true;
+        }
+        return false;
+    }
+
+    // 保存群聊对话轮数到数据文件
+    bool saveGroupRoundCounter()
+    {
+        json data;
+        std::shared_lock<std::shared_mutex> rlock(group_round_counter_mutex);
+        data["group_round_counter"] = group_round_counter;
+        return FileManager::writeJsonFile(DATA_PATH + "/AiModule/group_round_counter.json", data);
+    }
+    // 加载群聊对话轮数
+    bool loadGroupRoundCounter()
+    {
+        json data;
+        if(FileManager::readJsonFile(DATA_PATH + "/AiModule/group_round_counter.json", data))
+        {
+            if(data.empty())
+            {
+                Logger::warn("从数据文件中加载会话轮数时文件为空: ", DATA_PATH + "/AiModule/group_round_counter.json");
+                return true;
+            }
+            if(!data.contains("group_round_counter"))
+            {
+                Logger::warn("从数据文件中加载会话轮数时文件异常: ", DATA_PATH + "/AiModule/group_round_counter.json");
+                return false;
+            }
+            std::lock_guard<std::shared_mutex> lock(group_round_counter_mutex);
+            group_round_counter.clear();
+            group_round_counter = data["group_round_counter"].get<std::unordered_map<std::string, size_t>>();
+            return true;
+        }
+        return false;
+    }
+
     // AI 会话历史结构体
     struct SessionMemCtx{
         std::string role;
@@ -995,7 +1066,13 @@ private:
     // 获取或者创建 session 对应的对话历史
     std::vector<SessionMemCtx> getSessionHistory(const std::string& session_id)
     {
-        // 上锁
+        // 先上一个session_memory的全局写锁
+        std::unique_lock<std::shared_mutex> wlock(session_memory_global_lock);
+        if(session_memory.count(session_id))
+        {   // 如果已经存在则解全局锁
+            wlock.unlock();
+        }
+        // 获取锁
         std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
         std::lock_guard<std::mutex> session_lock(*session_mutex);
         return session_memory[session_id];
@@ -1005,7 +1082,7 @@ private:
     {
         std::vector<SessionMemCtx> result = {};
         std::vector<std::string> session_ids;
-        // 加上读锁
+        // 加上全局读锁
         std::shared_lock<std::shared_mutex> rlock(session_memory_global_lock);
         for(auto& session : session_memory)
         {
@@ -1026,12 +1103,6 @@ private:
         }
         return result;
     }
-    // 检查某个 session_id 是否记录在 session_memory
-    bool isSessionExit(const std::string& session_id)
-    {
-        // 这里不上锁避免死锁
-        return session_memory.count(session_id);
-    }
     // 更新会话历史
     bool UpdateSessionMemory(const std::string& session_id, const std::string& user_input, const std::string& ai_reply)
     {
@@ -1041,29 +1112,75 @@ private:
         mem1.content = user_input;
         mem2.role = "assistant";
         mem2.content = ai_reply;
-        // 先上一个session_memory的全局写锁
-        std::unique_lock<std::shared_mutex> wlock(session_memory_global_lock);
-        if(isSessionExit(session_id))
-        {   // 如果已经存在则解全局锁
-            wlock.unlock();
-        }
         // 先上锁
         std::shared_ptr<std::mutex> session_mutex = getSessionMutex(session_id);
         std::lock_guard<std::mutex> session_lock(*session_mutex);
         session_memory[session_id].emplace_back(mem1);
         session_memory[session_id].emplace_back(mem2);
         // 如果历史过多则清理历史并设置返回标志来更新用户画像
-        if(session_memory[session_id].size() > MAX_CHAT_HISTORY * 2) // 每轮两条对话
+        if(session_memory[session_id].size() > MAX_CHAT_ROUNDS * 2) // 每轮两条对话
         {
             session_memory[session_id].erase(session_memory[session_id].begin(), session_memory[session_id].begin()+2);
         }
         return true;
+    }
+    // 保存 session memory 到数据文件中
+    bool saveSessionMemory()
+    {
+        json data;
+        // 上读锁
+        std::shared_lock<std::shared_mutex> rlock(session_memory_global_lock);
+        for(auto& [session_id, history] : session_memory)
+        {
+            for(auto& msg : history)
+            {
+                data["session_memory"][session_id].push_back({
+                    {"role", msg.role},
+                    {"content", msg.content}
+                });
+            }
+        }
+        return FileManager::writeJsonFile(DATA_PATH + "/AiModule/session_memory.json", data);
+    }
+    // 从数据文件中加载 session memory
+    bool loadSessionMemory()
+    {
+        json data;
+        if(FileManager::readJsonFile(DATA_PATH + "/AiModule/session_memory.json", data))
+        {
+            if(data.empty())
+            {
+                Logger::warn("从数据文件中加载 session 时文件为空: ", DATA_PATH + "/AiModule/session_memory.json");
+                return true;
+            }
+            if(!data.contains("session_memory"))
+            {
+                Logger::warn("从数据文件中加载 session 时文件异常: ", DATA_PATH + "/AiModule/session_memory.json");
+                return false;
+            }
+            std::lock_guard<std::shared_mutex> lock(session_memory_global_lock);
+            session_memory.clear();
+            for(auto& [session_id, history] : data["session_memory"].items())
+            {
+                for(auto& mem : history)
+                {
+                    SessionMemCtx ctx;
+                    ctx.role = mem["role"];
+                    ctx.content = mem["content"];
+                    session_memory[session_id].push_back(ctx);
+                }
+            }
+            return true;
+        }
+        return false;
     }
 
     // bot 的人格记忆
     std::string learned_persona;  // 用户影响产生的人格
     // 不同群聊的人格记忆隔离, 用一个表记录
     static std::unordered_map<std::string, std::string> persona_map;
+    // 全局锁
+    static std::shared_mutex persona_map_global_lock;
     // 锁表
     static std::unordered_map<std::string, std::shared_ptr<std::mutex>> persona_mutex_map;
     static std::mutex persona_mutex_map_lock;
@@ -1080,6 +1197,12 @@ private:
     // 获取或者创建对应群聊的人格记忆
     std::string getBotPersona(const std::string& group_id)
     {
+        // 先上一个全局写锁
+        std::unique_lock<std::shared_mutex> wlock(persona_map_global_lock);
+        if(persona_map.count(group_id))
+        {
+            wlock.unlock();
+        }
         // 上锁
         std::shared_ptr<std::mutex> persona_mutex = getPersonaMutex(group_id);
         std::lock_guard<std::mutex> persona_lock(*persona_mutex);
@@ -1098,7 +1221,7 @@ private:
         json messages = json::array();
         messages.push_back({
             {"role", "system"},
-            {"content", "<1>以下是你目前的人格" + getBotPersona(group_id) + "<2>接下来输入一系列某个群聊内用户和bot的对话历史, 请融合并生成新的100字人格"}
+            {"content", "<1>以下是你目前的人格" + getBotPersona(group_id) + "<2>接下来输入一系列某个群聊内用户和bot的对话历史, 请融合并生成新的100字人格, 但不要涉及名字服装等等私人化定制内容"}
         });
         // 获取群聊的留存对话历史
         std::vector<SessionMemCtx> history = getGroupSessionHistory(group_id);
@@ -1140,6 +1263,38 @@ private:
         persona_map[group_id] = new_persona;
         return true;
     }
+    // 保存 bot 人格到数据文件中
+    bool saveBotPersona()
+    {
+        json data;
+        // 上读锁
+        std::shared_lock<std::shared_mutex> rlock(persona_map_global_lock);
+        data["persona_map"] = persona_map;
+        return FileManager::writeJsonFile(DATA_PATH + "/AiModule/persona_map.json", data);
+    }
+    // 从数据文件中加载 bot 人格
+    bool loadBotPersona()
+    {
+        json data;
+        if(FileManager::readJsonFile(DATA_PATH + "/AiModule/persona_map.json", data))
+        {
+            if(data.empty())
+            {
+                Logger::warn("从数据文件中加载bot人格时文件为空: ", DATA_PATH + "/AiModule/persona_map.json");
+                return true;
+            }
+            if(!data.contains("persona_map"))
+            {
+                Logger::warn("从数据文件中加载bot人格时文件异常: ", DATA_PATH + "/AiModule/persona_map.json");
+                return false;
+            }
+            std::lock_guard<std::shared_mutex> lock(persona_map_global_lock);
+            persona_map.clear();
+            persona_map = data["persona_map"].get<std::unordered_map<std::string, std::string>>();
+            return true;
+        }
+        return false;
+    }
 
     // 给对话过的用户画像
     struct UserProfile{
@@ -1149,6 +1304,8 @@ private:
     };
     // 不同群聊用户画像的记录
     static std::unordered_map<std::string, std::unordered_map<std::string, UserProfile>> users_profile_map;
+    // 一个全局锁
+    static std::shared_mutex users_profile_map_global_lock;
     // 群聊用户画像总的锁表
     static std::unordered_map<std::string, std::shared_ptr<std::mutex>> users_profile_mutex_map;
     static std::mutex users_profile_mutex_map_lock;
@@ -1165,6 +1322,12 @@ private:
     // 获取或创建群聊用户画像
     std::unordered_map<std::string, UserProfile> getUsersProfile(const std::string& group_id, const std::string& user_id)
     {
+        // 先上一个全局写锁
+        std::unique_lock<std::shared_mutex> wlock(users_profile_map_global_lock);
+        if(users_profile_map.count(group_id))
+        {
+            wlock.unlock();
+        }
         // 上锁
         std::shared_ptr<std::mutex> users_profile_mutex = getUsersProMutex(group_id);
         std::lock_guard<std::mutex> users_profile_lock(*users_profile_mutex);
@@ -1210,7 +1373,7 @@ private:
         json messages = json::array();
         messages.push_back({
             {"role", "system"},
-            {"content", "接下来输入一系列某个用户的对话历史, 请你返回50字的简要用户画像描述"}
+            {"content", "接下来输入一系列某个用户的对话历史, 请你返回一句话简要用户画像描述"}
         });
         // 获取对话历史
         std::vector<SessionMemCtx> history = getSessionHistory(session_id);
@@ -1275,6 +1438,59 @@ private:
         users_profile_map[group_id][user_id].nickname = raw_data2["data"]["nickname"];
         return true;
     }
+    // 保存用户画像到数据文件中
+    bool saveUsersProfile()
+    {
+        json data;
+        // 上读锁
+        std::shared_lock<std::shared_mutex> rlock(users_profile_map_global_lock);
+        for(auto& [group_id, users] : users_profile_map)
+        {
+            for(auto& [user_id, user] : users)
+            {
+                data["users_profile_map"][group_id][user_id] = {
+                    {"nickname", user.nickname},
+                    {"card", user.card},
+                    {"description", user.description}
+                };
+            }
+        }
+        return FileManager::writeJsonFile(DATA_PATH + "/AiModule/users_profile_map.json", data);
+    }
+    // 从数据文件中加载用户画像
+    bool loadUserProfile()
+    {
+        json data;
+        if(FileManager::readJsonFile(DATA_PATH + "/AiModule/users_profile_map.json", data))
+        {
+            if(data.empty())
+            {
+                Logger::warn("从数据文件中加载用户画像时文件为空: ", DATA_PATH + "/AiModule/users_profile_map.json");
+                return true;
+            }
+            if(!data.contains("users_profile_map"))
+            {
+                Logger::warn("从数据文件中加载用户画像时文件异常: ", DATA_PATH + "/AiModule/users_profile_map.json");
+                return false;
+            }
+            std::lock_guard<std::shared_mutex> lock(users_profile_map_global_lock);
+            users_profile_map.clear();
+            for(auto& [group_id, users] : data["users_profile_map"].items())
+            {
+                for(auto& [user_id, user] : users.items())
+                {
+                    UserProfile p;
+                    p.nickname = user["nickname"];
+                    p.card = user["card"];
+                    p.description = user["description"];
+                    users_profile_map[group_id][user_id] = p;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
 
     //与chatAI交互
     std::string ChatWithAI(const MessageContext& msgctx)
@@ -1314,13 +1530,13 @@ private:
         // 加入群聊用户画像
         messages.push_back({
             {"role", "system"},
-            {"content", "<3>接下来输入一系列用户画像, 格式为 id_xxx_nickname_xxx_des_xxx , 三个xxx分别对应用户id、昵称和描述"}
+            {"content", "<3>接下来输入一系列用户画像, 格式为 [id:xxx]_[nickname:xxx]_[des:xxx] , 三个[]内xxx分别对应用户id、昵称和描述"}
         });
         for(auto& user : users)
         {
             messages.push_back({
                 {"role", "system"},
-                {"content", "id_" + user.first + "_nickname_" + user.second.nickname + "_des_" + user.second.description}
+                {"content", "[id:" + user.first + "]_[nickname:" + user.second.nickname + "]_[des:" + user.second.description + "]"}
             });
         }
         // 加入对话历史
@@ -1383,10 +1599,11 @@ private:
         if(UpdateSessionMemory(session_id, user_input, ai_reply))
         {
             // 上锁，更新轮数
-            std::lock_guard<std::mutex> lock(session_round_counter_mutex);
+            std::lock_guard<std::shared_mutex> lock(session_round_counter_mutex);
             session_round_counter[session_id]++;
+            // 同步轮数
             Logger::info("更新对应 session 对话历史成功, 轮数: ", session_round_counter[session_id]);
-            if(session_round_counter[session_id] == MAX_CHAT_HISTORY)
+            if(session_round_counter[session_id] >= MAX_CHAT_ROUNDS/10)
             {
                 if(!UpdateUserProfile(session_id, msgctx.user_id, msgctx.group_id))
                 {
@@ -1398,10 +1615,10 @@ private:
                 }
             }
         }
-        std::lock_guard<std::mutex> group_round_lock(group_round_counter_mutex);
+        std::lock_guard<std::shared_mutex> group_round_lock(group_round_counter_mutex);
         group_round_counter[msgctx.group_id]++;
         Logger::info("当前群聊轮数: ", group_round_counter[msgctx.group_id]);
-        if(group_round_counter[msgctx.group_id] >= MAX_CHAT_HISTORY)
+        if(group_round_counter[msgctx.group_id] >= MAX_CHAT_ROUNDS)
         {
             if(!UpdateBotPersona(msgctx.group_id))
             {
@@ -1457,7 +1674,38 @@ private:
         Logger::info("获取ai回复成功, 长度: ", ai_reply.length());
         return ai_reply;
     }
+
+    // 计时
+    static std::chrono::steady_clock::time_point last_save_time;
+    static std::mutex save_mutex;
+    // 定时自动保存数据
+    bool autoSaveData()
+    {
+        auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(save_mutex);
+        if(now - last_save_time >= std::chrono::seconds(SAVE_FREQUENCY))
+        {
+            last_save_time = now;
+            return saveSessionRoundCounter() && saveSessionMemory() &&
+                saveGroupRoundCounter() && saveBotPersona() && saveUsersProfile();
+        }
+        return true;
+    }
+
 public:
+    ChatTaskManager()
+    {
+        loadSessionRoundCounter();
+        loadGroupRoundCounter();
+        Logger::info("对话数量已加载", "");
+        loadSessionMemory();
+        Logger::info("会话历史已加载", "");
+        loadBotPersona();
+        Logger::info("Bot 人格已加载", "");
+        loadUserProfile();
+        Logger::info("用户画像已加载", "");
+        last_save_time = std::chrono::steady_clock::now();
+    }
     bool canHandle(const MessageContext& msgctx) override
     {
         return msgctx.pmsgsegs.at_me && (msgctx.msg_type == "group");
@@ -1478,6 +1726,7 @@ public:
         }else{
             result.emplace_back(MessageManager::buildMsg("text", ChatWithAI(msgctx)));
         }
+        if(!autoSaveData()) Logger::warn("数据保存有异常", "");
         return result;
     }
 };
@@ -1489,15 +1738,20 @@ std::shared_mutex ChatTaskManager::session_memory_global_lock;
 std::unordered_map<std::string, std::string> ChatTaskManager::persona_map;
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::persona_mutex_map;
 std::mutex ChatTaskManager::persona_mutex_map_lock;
+std::shared_mutex ChatTaskManager::persona_map_global_lock;
 
 std::unordered_map<std::string, std::unordered_map<std::string, ChatTaskManager::UserProfile>> ChatTaskManager::users_profile_map;
 std::unordered_map<std::string, std::shared_ptr<std::mutex>> ChatTaskManager::users_profile_mutex_map;
 std::mutex ChatTaskManager::users_profile_mutex_map_lock;
+std::shared_mutex ChatTaskManager::users_profile_map_global_lock;
 
 std::unordered_map<std::string, size_t> ChatTaskManager::session_round_counter;
-std::mutex ChatTaskManager::session_round_counter_mutex;
+std::shared_mutex ChatTaskManager::session_round_counter_mutex;
 std::unordered_map<std::string, size_t> ChatTaskManager::group_round_counter;
-std::mutex ChatTaskManager::group_round_counter_mutex;
+std::shared_mutex ChatTaskManager::group_round_counter_mutex;
+
+std::chrono::steady_clock::time_point ChatTaskManager::last_save_time;
+std::mutex ChatTaskManager::save_mutex;
 
 //////////////
 // 总的任务管理器

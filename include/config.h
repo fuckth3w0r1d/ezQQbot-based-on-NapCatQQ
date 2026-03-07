@@ -117,9 +117,9 @@ public:
         return data["ai"]["max_tokens"].get<const int>();
     }
 
-    const size_t getMaxChatHistory()
+    const size_t getMaxChatRounds()
     {
-        return data["ai"]["max_history"].get<const size_t>();
+        return data["ai"]["max_rounds"].get<const size_t>();
     }
 
     const std::string getB23Appid()
@@ -152,14 +152,19 @@ public:
         return data["file"]["download_size_limit"].get<const size_t>();
     }
 
-    const std::filesystem::path getCachePath()
+    const std::string getCachePath()
     {
-        return std::filesystem::path(data["file"]["cache_path"].get<std::string>());
+        return data["file"]["cache_path"].get<const std::string>();
     }
 
-    const std::filesystem::path getDataPath()
+    const std::string getDataPath()
     {
-        return std::filesystem::path(data["file"]["data_path"].get<std::string>());
+        return data["file"]["data_path"].get<const std::string>();
+    }
+
+    const std::size_t getSaveFrequency()
+    {
+        return data["file"]["save_frequency_seconds"].get<const size_t>();
     }
 
     const size_t getDownloadBufferSize()
