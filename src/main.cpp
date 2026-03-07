@@ -1643,10 +1643,11 @@ private:
     std::string askAI(const MessageContext& msgctx)
     {
         httplib::SSLClient cli(AI_CLIENT_HOST2, AI_CLIENT_PORT);
+        cli.enable_server_certificate_verification(true);
         json body;
         httplib::Headers headers = {
             {"Authorization", "Bearer " + AI_KEY2},
-            {"Content-Type", "application/json"}
+            {"Expect", ""}
         };
         json messages = json::array();
         // messages.push_back({
