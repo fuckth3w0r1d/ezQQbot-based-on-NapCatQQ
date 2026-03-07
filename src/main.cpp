@@ -289,12 +289,16 @@ public:
     static void cleanCache()
     {
         std::filesystem::path cache_dir = CACHE_PATH;
-        if(!std::filesystem::exists(cache_dir)) return;
+        if(!std::filesystem::exists(cache_dir))
+        {
+            Logger::warn("清理缓存时发现缓存目录不存在: ", cache_dir);
+            return;
+        }
         // 收集所有文件
         std::vector<std::filesystem::path> files;
         for(const auto& entry : std::filesystem::directory_iterator(cache_dir))
         {
-            if (entry.is_regular_file())
+            if(entry.is_regular_file())
             {
                 files.push_back(entry.path());
             }
@@ -312,7 +316,7 @@ public:
                   });
         // 计算需要删除的数量
         size_t files_to_delete = files.size() - CACHE_FILE_LIMIT;
-        Logger::info("缓存文件数量超过10, 将删除最旧的文件, 需清理文件数: ", files_to_delete);
+        Logger::info("缓存文件数量超过限制, 将删除最旧的文件, 需清理文件数: ", files_to_delete);
         // 删除最旧的文件
         for(size_t i = 0; i < files_to_delete; i++) 
         {
@@ -353,7 +357,7 @@ public:
         std::string dhost = match[1];
         std::string dpath = match[3];
         // 获取下载文件路径
-        std::filesystem::path save_path = path + filename;
+        std::filesystem::path save_path = std::filesystem::path(path) / filename;
         std::shared_ptr<std::mutex> file_mutex = getFileMutex(save_path.generic_string());
         std::lock_guard<std::mutex> file_lock(*file_mutex); // 上锁
         if(std::filesystem::exists(save_path))
