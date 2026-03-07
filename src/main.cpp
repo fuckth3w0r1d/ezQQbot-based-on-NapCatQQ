@@ -350,8 +350,8 @@ public:
             Logger::error("URL 解析失败", url);
             return "";
         }
-        std::string host = match[1];
-        std::string path = match[3];
+        std::string dhost = match[1];
+        std::string dpath = match[3];
         // 获取下载文件路径
         std::filesystem::path save_path = path + filename;
         std::shared_ptr<std::mutex> file_mutex = getFileMutex(save_path.generic_string());
@@ -362,7 +362,7 @@ public:
             return save_path.generic_string();
         }
         // 建立SSL客户端
-        httplib::SSLClient cli(host);
+        httplib::SSLClient cli(dhost);
         cli.set_follow_location(true);
         cli.enable_server_certificate_verification(false); // 下载关闭证书
         cli.set_read_timeout(60);   // 防止卡死
@@ -380,7 +380,7 @@ public:
         // 流式下载
         std::atomic<size_t> downloaded_size{0};
         bool size_limit_exceeded = false;
-        auto res = cli.Get(path, headers, [&](const char* data, size_t data_length){
+        auto res = cli.Get(dpath, headers, [&](const char* data, size_t data_length){
                 if(downloaded_size.load() + data_length > DOWNLOAD_SIZE_LIMIT)
                 {
                     size_limit_exceeded = true;
