@@ -15,10 +15,14 @@ private:
 public:
     Config()
     {
-        std::ifstream file("/home/r3t2/PPBot/config.json"); // config.json在项目根目录, 编译出的bot.exe也在项目根目录
+        if(!std::filesystem::exists("/home/r3t2/PPBot/config.json"))
+        {
+            std::cerr << "全局配置文件不存在" << std::endl;
+        }
+        std::ifstream file("/home/r3t2/PPBot/config.json");
         if (!file.is_open()) 
         {
-            std::cerr << "无法打开文件" << std::endl;
+            std::cerr << "无法打开配置文件" << std::endl;
         }
         data = json::parse(file);
     }
@@ -151,6 +155,11 @@ public:
     const std::filesystem::path getCachePath()
     {
         return std::filesystem::path(data["file"]["cache_path"].get<std::string>());
+    }
+
+    const std::filesystem::path getDataPath()
+    {
+        return std::filesystem::path(data["file"]["data_path"].get<std::string>());
     }
 
     const size_t getDownloadBufferSize()

@@ -53,9 +53,10 @@ const std::string B23_CLIENT_HOST = cfg.getB23Host();
 const int B23_CLIENT_PORT = cfg.getB23Port();
 const std::string B23_QUERY_PATH = cfg.getB23GetQueryPath();
 const std::string B23_PLAY_PATH = cfg.getB23GetPlayPath();
-// 本地文件缓存
+// 本地文件缓存或数据
 const size_t DOWNLOAD_SIZE_LIMIT = cfg.getDownloadSizeLimit();
 const std::filesystem::path CACHE_PATH = cfg.getCachePath();
+const std::filesystem::path DATA_PATH = cfg.getDataPath();
 const size_t DOWNLOAD_BUFFER_SIZE = cfg.getDownloadBufferSize();
 const size_t CACHE_FILE_LIMIT = cfg.getCacheFileLimit();
 // 随机图片
@@ -326,13 +327,21 @@ public:
             }
         }
     }
-    // 下载函数
-    static std::string downloadFile(const std::string& url, const httplib::Headers& headers, const std::string& filename)
+    // 网络文件下载到指定目录
+    static std::string downloadFile(const std::string& url, const httplib::Headers& headers, const std::string& path ,const std::string& filename)
     {
-        // 先清理缓存
-        cleanCache();
+        // 检查路径是否存在
+        if(!std::filesystem::exists(path))
+        {
+            Logger::warn("路径不存在", path);
+            return "";
+        }
         // 检查文件名称
-        if(!isValidFilename(filename)) return "";
+        if(!isValidFilename(filename))
+        {
+            Logger::warn("文件名不合法: ", filename);
+            return "";
+        }
         // 使用正则表达式解析url
         std::regex url_pattern(R"(https?://([^/:]+)(:\d+)?(/.*))");
         std::smatch match;
@@ -343,17 +352,13 @@ public:
         }
         std::string host = match[1];
         std::string path = match[3];
-        // 创建 cache 目录
-        std::filesystem::path cache_dir = CACHE_PATH;
-        std::filesystem::create_directories(cache_dir); // 这个函数是原子操作
-        Logger::info("cache目录: ", cache_dir);
         // 获取下载文件路径
-        std::filesystem::path save_path = cache_dir / filename;
+        std::filesystem::path save_path = path + filename;
         std::shared_ptr<std::mutex> file_mutex = getFileMutex(save_path.generic_string());
         std::lock_guard<std::mutex> file_lock(*file_mutex); // 上锁
         if(std::filesystem::exists(save_path))
         {
-            Logger::info("cache目录中已经存在文件", filename);
+            Logger::info("目录中已经存在文件", save_path);
             return save_path.generic_string();
         }
         // 建立SSL客户端
@@ -408,6 +413,42 @@ public:
         // 返回路径
         Logger::info("文件已下载到: ", save_path.generic_string());
         return save_path.generic_string(); // generic_string方法, 使用 / 
+    }
+
+    // 写入 json 数据文件
+    static bool writeJsonFile(const std::string& path, const json& data)
+    {
+        // 上锁
+        std::shared_ptr<std::mutex> file_mutex = getFileMutex(path);
+        std::lock_guard<std::mutex> lock(*file_mutex);
+        std::ofstream ofs(path);
+        if(!ofs.is_open())
+        {
+            Logger::error("JSON 文件写入时打开失败", path);
+            return false;
+        }
+        ofs << data.dump(4);
+        return true;
+    }
+    // 读取 json 数据文件
+    static bool readJsonFile(const std::string& path, json& data)
+    {
+        if(!std::filesystem::exists(path))
+        {
+            Logger::warn("JSON 文件不存在", path);
+            return false;
+        }
+        // 上锁
+        std::shared_ptr<std::mutex> file_mutex = getFileMutex(path);
+        std::lock_guard<std::mutex> lock(*file_mutex);
+        std::ifstream ifs(path);
+        if(!ifs.is_open())
+        {
+            Logger::error("JSON 文件读取时打开失败", path);
+            return false;
+        }
+        data = json::parse(ifs);
+        return true;
     }
 };
 // 定义文件锁表
@@ -867,7 +908,9 @@ private:
             {"Referer", "https://www.bilibili.com"},
             {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         };
-        std::string video_path = FileManager::downloadFile(bvinfo.url, headers, bvinfo.bvid + ".mp4");
+        // 先清理缓存
+        FileManager::cleanCache();
+        std::string video_path = FileManager::downloadFile(bvinfo.url, headers, CACHE_PATH, bvinfo.bvid + ".mp4");
         return std::make_pair(result, video_path);
     }
 public:
@@ -1504,6 +1547,14 @@ public:
         svr.Post("/", [this](const httplib::Request& req, httplib::Response& res){
             this->handlePost(req, res);
         });
+        // 创建 cache 目录
+        std::filesystem::path cache_dir = CACHE_PATH;
+        std::filesystem::create_directories(cache_dir); // 这个函数是原子操作
+        Logger::info("cache目录: ", cache_dir);
+        // 创建 data 目录
+        std::filesystem::path data_dir = DATA_PATH;
+        std::filesystem::create_directories(data_dir); // 这个函数是原子操作
+        Logger::info("data目录: ", data_dir);
     }
 
     // 启动服务器
