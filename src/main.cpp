@@ -1673,7 +1673,7 @@ private:
         });
         // 构造请求体
         body["model"] = AI_MODEL2;
-        body["messages"] = messages;
+        body["messages"] = messages.dump();
         auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
         {
