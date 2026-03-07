@@ -1648,31 +1648,30 @@ private:
             {"Authorization", "Bearer " + AI_KEY2},
             {"Content-Type", "application/json"}
         };
-        json input = json::array();
-        input.push_back({
+        json messages = json::array();
+        messages.push_back({
             {"role", "system"},
             {"content", "You are a helpful assistant."}
         });
-        json user_input = json::array();
-        user_input.push_back({
-            {"type", "input_text"},
+        json input = json::array();
+        input.push_back({
+            {"type", "text"},
             {"text", msgctx.pmsgsegs.text}
         });
         if(msgctx.pmsgsegs.has_image)
         {
-            user_input.push_back({
-                {"type", "input_image"},
-                {"image_url", msgctx.pmsgsegs.image}
+            input.push_back({
+                {"type", "image_url"},
+                {"image_url", {"url", msgctx.pmsgsegs.image}}
             });
         }
-        input.push_back({
+        messages.push_back({
             {"role", "user"},
-            {"content", user_input}
+            {"content", input}
         });
         // 构造请求体
         body["model"] = AI_MODEL2;
-        body["input"] = input;
-        body["max_tokens"] = AI_MAX_TOKENS;
+        body["messages"] = messages;
         auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
         {
