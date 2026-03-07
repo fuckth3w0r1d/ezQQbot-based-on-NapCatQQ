@@ -87,9 +87,19 @@ public:
         return data["ai"]["key"].get<const std::string>();
     }
 
+    const std::string getAIKey2()
+    {
+        return data["ai2"]["key"].get<const std::string>();
+    }
+
     const std::string getAIHost()
     {
         return data["ai"]["host"].get<const std::string>();
+    }
+
+    const std::string getAIHost2()
+    {
+        return data["ai2"]["host"].get<const std::string>();
     }
 
     const int getAIPort()
@@ -102,9 +112,19 @@ public:
         return data["ai"]["path"].get<const std::string>();
     }
 
+    const std::string getAIPostPath2()
+    {
+        return data["ai2"]["path"].get<const std::string>();
+    }
+
     const std::string getAIModel()
     {
         return data["ai"]["model"].get<const std::string>();
+    }
+
+    const std::string getAIModel2()
+    {
+        return data["ai2"]["model"].get<const std::string>();
     }
 
     const std::string getAISysPrompts()

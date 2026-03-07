@@ -47,6 +47,11 @@ const std::string AI_MODEL = cfg.getAIModel();
 const std::string AI_DEFAULT_SYS_PROMPTS = cfg.getAISysPrompts();
 const int AI_MAX_TOKENS = cfg.getAIMaxTokens();
 const size_t MAX_CHAT_ROUNDS = cfg.getMaxChatRounds();
+
+const std::string AI_KEY2 = cfg.getAIKey2();
+const std::string AI_CLIENT_HOST2 = cfg.getAIHost2();
+const std::string AI_POST_PATH2 = cfg.getAIPostPath2();
+const std::string AI_MODEL2 = cfg.getAIModel2();
 // bilibili
 const std::string B23_APP_ID = cfg.getB23Appid();
 const std::string B23_CLIENT_HOST = cfg.getB23Host();
@@ -114,6 +119,10 @@ private:
             if(type == "image")
             {
                 result.has_image = true;
+                if(seg["data"].contains("url"))
+                {
+                    result.image = json::parse(seg["data"]["url"].get<std::string>());
+                }
             }
             if(type == "json")
             {
@@ -1630,13 +1639,13 @@ private:
         }
         return ai_reply;
     }
-    // 单纯的与纯净模型交互
-    std::string askAI(const std::string& user_input)
+    // 单纯的与纯净模型交互 (豆包)
+    std::string askAI(const MessageContext& msgctx)
     {
-        httplib::SSLClient cli(AI_CLIENT_HOST, AI_CLIENT_PORT);
+        httplib::SSLClient cli(AI_CLIENT_HOST2, AI_CLIENT_PORT);
         json body;
         httplib::Headers headers = {
-            {"Authorization", "Bearer " + AI_KEY},
+            {"Authorization", "Bearer " + AI_KEY2},
             {"Content-Type", "application/json"}
         };
         json messages = json::array();
@@ -1644,15 +1653,27 @@ private:
             {"role", "system"},
             {"content", "You are a helpful assistant."}
         });
+        json user_input = json::array();
+        user_input.push_back({
+            {"type", "input_text"},
+            {"text", msgctx.pmsgsegs.text}
+        });
+        if(msgctx.pmsgsegs.has_image)
+        {
+            user_input.push_back({
+                {"type", "input_image"},
+                {"image_url", msgctx.pmsgsegs.image}
+            });
+        }
         messages.push_back({
             {"role", "user"},
             {"content", user_input}
         });
         // 构造请求体
-        body["model"] = AI_MODEL;
+        body["model"] = AI_MODEL2;
         body["messages"] = messages;
         body["max_tokens"] = AI_MAX_TOKENS;
-        auto res = cli.Post(AI_POST_PATH, headers, body.dump(), "application/json");
+        auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
         {
             Logger::error("AI网络请求失败", httplib::to_string(res.error()));
@@ -1722,7 +1743,7 @@ public:
         }
         if(msgctx.pmsgsegs.text[0] == '/')
         {
-            result.emplace_back(MessageManager::buildMsg("text", askAI(msgctx.pmsgsegs.text.substr(1))));
+            result.emplace_back(MessageManager::buildMsg("text", askAI(msgctx)));
         }else{
             result.emplace_back(MessageManager::buildMsg("text", ChatWithAI(msgctx)));
         }
