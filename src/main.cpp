@@ -1662,7 +1662,9 @@ private:
         {
             input.push_back({
                 {"type", "image_url"},
-                {"image_url", {"url", msgctx.pmsgsegs.image}}
+                {"image_url", {
+                    {"url", msgctx.pmsgsegs.image}
+                }}
             });
         }
         messages.push_back({
