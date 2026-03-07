@@ -1382,7 +1382,7 @@ private:
         json messages = json::array();
         messages.push_back({
             {"role", "system"},
-            {"content", "接下来输入一系列某个用户的对话历史, 请你返回一句话简要用户画像描述"}
+            {"content", "接下来输入一系列user和assistant的对话历史, 请你返回一句话概括user特点"}
         });
         // 获取对话历史
         std::vector<SessionMemCtx> history = getSessionHistory(session_id);
@@ -1648,8 +1648,8 @@ private:
             {"Authorization", "Bearer " + AI_KEY2},
             {"Content-Type", "application/json"}
         };
-        json messages = json::array();
-        messages.push_back({
+        json input = json::array();
+        input.push_back({
             {"role", "system"},
             {"content", "You are a helpful assistant."}
         });
@@ -1665,13 +1665,13 @@ private:
                 {"image_url", msgctx.pmsgsegs.image}
             });
         }
-        messages.push_back({
+        input.push_back({
             {"role", "user"},
             {"content", user_input}
         });
         // 构造请求体
         body["model"] = AI_MODEL2;
-        body["messages"] = messages;
+        body["input"] = input;
         body["max_tokens"] = AI_MAX_TOKENS;
         auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
