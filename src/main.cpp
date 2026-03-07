@@ -1649,10 +1649,10 @@ private:
             {"Content-Type", "application/json"}
         };
         json messages = json::array();
-        messages.push_back({
-            {"role", "system"},
-            {"content", "You are a helpful assistant."}
-        });
+        // messages.push_back({
+        //     {"role", "system"},
+        //     {"content", "You are a helpful assistant."}
+        // });
         json input = json::array();
         input.push_back({
             {"type", "text"},
@@ -1673,7 +1673,7 @@ private:
         });
         // 构造请求体
         body["model"] = AI_MODEL2;
-        body["messages"] = messages.dump();
+        body["messages"] = messages;
         auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
         {
