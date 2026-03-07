@@ -1674,6 +1674,7 @@ private:
         // 构造请求体
         body["model"] = AI_MODEL2;
         body["messages"] = messages;
+        Logger::debug("请求体: ", body.dump(4));
         auto res = cli.Post(AI_POST_PATH2, headers, body.dump(), "application/json");
         if(!res)
         {
